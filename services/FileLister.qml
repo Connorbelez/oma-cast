@@ -312,11 +312,14 @@ Item {
 
   // ------------------------------------------------------ the ignore file
 
+  // An append to a deleted ignore file would leave only the new line, and
+  // rg would then list the private paths, so the defaults go in first.
   function ignore(path) {
     if (FileIndex.ignores(lister.ignoreText, lister.home, path)) return { added: false }
     var line = FileIndex.ignoreLine(lister.home, path)
     var gap = lister.ignoreText && lister.ignoreText.charAt(lister.ignoreText.length - 1) !== "\n" ? "\n" : ""
     lister.ignoreText += gap + line + "\n"
+    lister.save("create", lister.ignoreFile, FileIndex.defaultIgnoreText(), null)
     lister.save("append", lister.ignoreFile, gap + line + "\n", function(ok) { if (ok) lister.refresh(lister.defaultRoots) })
     return { added: true, line: line }
   }
