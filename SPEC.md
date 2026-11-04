@@ -545,12 +545,13 @@ Grammar: `{keyword opt="v" opt2='v' | modifier | modifier}`. Quotes accepted: `"
 | List files (`rg --files`) | 196 ms, 327,643 files | 11 to 13 ms, 14,949 files |
 | Search contents for one word (`rg -l -F -i -f -`), warm | not measured | 24 to 25 ms, whatever the query |
 | Search contents, file pages evicted (`posix_fadvise`), directory cache warm | | 148 to 156 ms |
-| List files, directory cache cold | needs root to measure; an operator step in the Phase 7 plan | |
+| List files, caches cold, fresh btrfs copy through a loop device (a floor) | 632 to 738 ms, 327,655 files, 12,407 reads, 203 MB | 36 to 74 ms, 14,951 files, 1,142 reads, 18.7 MB |
 
 1. Two subtrees hold 95% of the files, `~/Applications/UnrealEngine` (300,136) and `~/node_modules` (12,558). Detecting them removes the cost.
 2. Without them, `ripgrep` lists and searches the tree in tens of milliseconds, so a persistent index buys nothing at this scale.
 3. Fuzzy matching across the full path matches nearly everything. The file name has to carry the match.
 4. The QML JS engine runs a character-loop matcher 25 times slower than node (45 to 52 ms per keystroke over 14,949 names). One native `RegExp` per name takes 1 to 4 ms. The fallback matcher is regex-based.
+5. The cold rows come from `cold-loop.sh`, which needs no root. It copies the listed tree into a fresh btrfs image, mounts the image through udisks as the user, and evicts the image's pages before each run. Five rounds each. Every cold run cost 39 to 52 µs per read through the loop device, so the number is the read count times that latency. The real home's metadata is older and more fragmented, so it needs more reads than the copy, and the copy's numbers are a floor. The same loop run put the content search at 593 to 643 ms against 148 to 156 ms on the real home with `posix_fadvise`, so the loop serialises reads that the NVMe serves in parallel, and the real-home content number stands. Even through the loop, the first listing after a reboot is a tenth of the 1 s index trigger, and the daily full-home pass stays under 1 s.
 
 `ripgrep`, `fd` and `zoxide` are in Omarchy's base packages (`$OMARCHY_PATH/install/omarchy-base.packages`), so v1 adds no runtime dependency. A persistent index stays a later upgrade, taken only when a measured trigger below fires.
 
@@ -904,8 +905,8 @@ Repo layout [D]:
 - **Accept:** every WM command is correct on a dual-monitor Hyprland setup with reserved waybar space, tested with a golden geometry table. Switch Windows focuses across workspaces.
 
 ### Phase 7: File search (§8.6) [D, 2026-11-04]
-- Prototyped on 2026-11-04 (`docs/phase7-prototypes/`): the large-subtree threshold, the ranking bands with bounded lift, the content-reveal gate, warm and content-cold search timing, and the matcher's speed in Qt's JS engine. Still open: the listing time with a cold directory cache, which needs one root command the operator runs (`docs/phase7-prototypes/cold.sh`).
-- The PR-by-PR plan with live and perf checks is `docs/phase7-file-search-plan.md`. Build in its order: listing and large-subtree detection, the file ranker and the Search Files view, the preview pane and actions, the root Files section, progressive content results, the Neovim signal.
+- Prototyped on 2026-11-04 (`docs/phase7-prototypes/`): the large-subtree threshold, the ranking bands with bounded lift, the content-reveal gate, warm and content-cold search timing, the matcher's speed in Qt's JS engine, and the cold listing through a loop image (`cold-loop.sh`, no root): 36 to 74 ms for the working list and 632 to 738 ms for the full home, both a floor for the real home. `cold.sh` stays for an optional real-home check with root.
+- The PR-by-PR plan with live and perf checks is `docs/phase7-file-search-plan.md`. Build in its order: listing and large-subtree detection, the file ranker and the Search Files view, the preview pane and actions, the root Files section, progressive content results, the Neovim signal. The PRs are a Graphite stack (`gt`) on the operator's fork, one branch per PR, each child on its parent.
 - Prove each step with the `verify-omacast` skill (`.agents/skills/verify-omacast/`), and check the search ordering with `verify-search-ordering` whenever the async path changes.
 - **Accept** (on the dev machine: 327k files in `$HOME`, `~/Applications/UnrealEngine` and `~/node_modules` as the vendor trees):
   - The two vendor trees are detected as large untouched subtrees without configuration, a toast offers to ignore them, and `~/Dev` is not flagged.
@@ -913,7 +914,7 @@ Repo layout [D]:
   - `oma spec` puts `~/Projects/oma-cast/SPEC.md` first. A file opened twice from omacast outranks an untouched file in the same band, and never outranks an exact file-name match.
   - `frec` shows content rows (fewer than 5 substring name hits) within 300 ms warm, measured under 50 ms. The next keystroke cancels them, and ↵ never opens a row from the older query.
   - No process argv ever holds query text (`tests/privacy.test.js` plus a live `ps` check during a content search).
-  - The listing time with a cold directory cache is measured once with `cold.sh` and recorded in §8.6, deciding whether the index upgrade is needed.
+  - The first `files: listed` time after the operator's next reboot is recorded in §8.6 beside the loop-image floor of 36 to 74 ms. Over 1 s triggers the index upgrade.
 
 ### Phase 8: Parity features
 - Emoji & Symbols, Notes window, Theme Studio, Switch Theme, Confetti, Focus, Screenshots, Calendar, Contacts, Dictionary, Translator (provider), Dictation (whisper.cpp), Typing Practice, `.rayconfig` import/export (§11), Kill Process and Color Picker as first-party extras.
@@ -930,7 +931,7 @@ Repo layout [D]:
 - **Extension compatibility ceiling.** Many store extensions are macOS-bound (AppleScript, `~/Library` paths, Mac apps). Expect roughly a minority to need changes. Measure it with the compatibility script, and prefer extensions that list `Windows` in `platforms`.
 - **`@raycast/api` behaviour drift.** Raycast evolves the API, so pin a version (2.8.2 shipped API whose template depends on `@raycast/api ^2.6.3`, `@raycast/utils ^2.2.7` [O]). Track the public changelog.
 - **Snippet expansion needs input-device access.** This is a security trade-off; keep it opt-in, and do the IBus/Fcitx5 engine as the cleaner long-term path.
-- **File search after a reboot.** Every §8.6 timing was measured with a warm page cache. The first search after boot reads every candidate file from disk and may take seconds; measure it before Phase 7 ships (§8.6 upgrade triggers).
+- **File search after a reboot.** The §8.6 cold timings come from a fresh btrfs copy of the tree read through a loop device, a floor for the real home. The real home's first listing after a reboot is recorded by P7-1 in the Phase 7 plan, and over 1 s takes the index route (§8.6 upgrade triggers).
 - **Unrecovered numbers** [I]: backend timeouts and restart limits, HUD duration, the Suggestions section size, and window y-offset. Pick sensible values (given above) and tune them.
 - **Frecency epoch:** Raycast's anchor epoch wasn't confirmed. It doesn't matter for a clone that uses Unix seconds consistently, but convert carefully when importing `frecency` from `.rayconfig` (check whether values look like 2001-epoch seconds, i.e. ≈ 8×10⁸ vs Unix ≈ 1.7×10⁹).
 - **Calculator parity.** Soulver-style natural language ("$30 + 20%", "3 days from now", time zones) exceeds `fend`. Consider libqalculate as an alternate engine behind the same interface. **[D] 2026-10-19:** the Quickshell build uses neither. `core/Calculator.js` is a self-contained JS evaluator that covers these cases (see CLAUDE.md Status). libqalculate isn't an Omarchy dependency, and `qalc` reads "15% of 80" and "3 days from now" differently from Soulver.

@@ -83,15 +83,26 @@ Counting subsequence hits instead would hold `frecency` back until `frecenc`. Ev
 
 Content-cold. `evict.py` drops every working file's pages with `posix_fadvise(DONTNEED)`, directory entries stay warm. 3 rounds for 4 queries, cold 148 to 156 ms, the warm rerun 23 to 27 ms. The NVMe reads of 15k small files bound the cold number.
 
-## Disk-cold listing (`cold.sh`)
+## Disk-cold listing (`cold-loop.sh`, `cold.sh`)
 
-Not measured. Dropping the directory cache needs root and this machine's sudo rules allow only three Omarchy commands. The operator runs it once:
+Dropping the directory cache needs root and this machine's sudo rules allow only three Omarchy commands, so `cold-loop.sh` measures a copy instead. It stages every path in `all.txt` as an empty file and every working-list file of 1 MB or less with its contents (14,875 files, 277 MB), writes them into a btrfs image with `mkfs.btrfs --rootdir`, attaches and mounts the image through `udisksctl` as the user, and before each cold run detaches it and drops the image's pages with `posix_fadvise`. `fincore` confirms 0 resident bytes before every cold run. The work directory must sit on the real disk, because `/tmp` is tmpfs.
 
 ```sh
-sudo sysctl -w vm.drop_caches=3 && ./cold.sh
+W=~/.cache/omacast-cold; mkdir -p $W; cp all.txt work.txt $W/
+ROUNDS=5 ./cold-loop.sh $W     # about three minutes the first time, for the 1.4 GB image
 ```
 
-It prints the cold and warm listing time, the cold and warm content search, and the full-home listing time that the daily large-subtree pass would pay.
+Five rounds on 2026-11-04, load 0.4.
+
+| Run | Cold | Warm | Reads in the cold run |
+|---|---|---|---|
+| Listing with `ignore.txt`, 14,951 files | 36 to 74 ms, median 45 | 10 to 12 ms | 1,142 reads, 18.7 MB |
+| Content search for `frecency`, 28 hits | 593 to 643 ms | 22 to 24 ms | 11,570 reads, 280 MB |
+| Full-home listing, 327,655 files | 632 to 738 ms, median 662 | 166 to 174 ms | 12,407 reads, 203 MB |
+
+Every cold run cost 39 to 52 µs per read whatever the workload, so the loop device's read path bounds the numbers, not CPU. The warm reruns show the CPU share. Two corrections apply when reading them for the real home. The copy is a fresh, compact btrfs, and the real home's metadata is more fragmented, so the real cold listing needs more reads and the copy is a floor. The loop device serialises reads that the NVMe serves to ripgrep's threads in parallel, which is why the content search here takes 600 ms against the 148 to 156 ms that `evict.py` measured on the real files. The real-home content number stands.
+
+`cold.sh` is the direct measurement for an operator with root. It prints the same four numbers plus the full-home listing after `sudo sysctl -w vm.drop_caches=3`.
 
 ## Matcher speed in Qt's JS engine (`v4.qml`, `v4re.qml`)
 

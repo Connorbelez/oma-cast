@@ -20,7 +20,7 @@ The program runs `skills/p3-mode/playbooks/autopilot-stack.md`. Owners stop at m
 
 ### Spawn owners
 - [ ] Spawn one owner per PR with the full lifecycle the execution playbook names.
-- [ ] Follow this dependency graph. Start dependent work only after its parent merges, or base it on the parent branch when the execution playbook stacks.
+- [ ] Follow this dependency graph. Every PR is a Graphite branch on its parent, so dependent work starts on the parent branch as soon as the parent is code-ready, and `gt restack` carries later parent changes down.
   - [ ] P7-1 is first and branches from `main`.
   - [ ] P7-2 after P7-1.
   - [ ] P7-3 after P7-2.
@@ -31,19 +31,21 @@ The program runs `skills/p3-mode/playbooks/autopilot-stack.md`. Owners stop at m
 - [ ] Hold the review gate. P7-1, P7-2, P7-3, P7-4 and P7-5 change an interaction. They wait for the operator's review in chat with screenshots and a video before merge.
 
 ### PR mechanics, for every PR
-- [ ] GitHub CLI (`gh`) is the forge. Never require Graphite (`gt`). Call `link_pull_request` for every PR the moment it opens.
-- [ ] Open every PR on the operator's fork with `--repo Connorbelez/oma-cast`, never on `typecraft-dev/oma-cast`.
-- [ ] Open the PR ready, never draft, per **Opening a PR**. Use `gh pr create --base <base-branch>`. A stack child targets its parent branch.
+- [ ] Graphite (`gt`) manages the stack and opens the PRs. The operator chose it on 2026-11-04, and that choice replaces the playbook's "never require Graphite" line for this program. `gh` stays for `pr view`, `pr checks`, `pr edit` and the merge. Call `link_pull_request` for every PR the moment it opens.
+- [ ] `origin` is the operator's fork `Connorbelez/oma-cast`, and `gt submit` opens every PR there. Never add `typecraft-dev/oma-cast` as a remote in this program.
+- [ ] Create each branch from its parent so Graphite records the stack. `gt checkout <parent-branch> && gt create <branch>` for a child, and `gt checkout main && gt create <branch>` for P7-1. Commit with `git commit` or `gt modify`. Push and open the PR with `gt submit --no-interactive --no-edit`, which targets the parent branch. From a branch with children, `gt submit --stack` resubmits the descendants too. Never pass `--draft`.
+- [ ] `gt submit` refuses the fork until the operator syncs it with Graphite at `https://app.graphite.com/settings/synced-repos` (observed on 2026-11-04: "You can only submit to repos synced with Graphite"). Until then, open the PR on the `gt`-created branch with `gh pr create --repo Connorbelez/oma-cast --base <parent-branch>` after `git push -u origin <branch>`. The stack shape is the same either way, and `gt submit --stack` takes over once the repo is synced.
+- [ ] When a parent branch moves, run `gt restack` from the top of the stack and submit again from the root with `gt submit --stack --no-interactive --no-edit`. Rebase onto trunk with `gt sync --no-interactive` followed by `gt restack`.
 - [ ] Run `node --test tests/*.test.js` and `omarchy plugin validate .` once before the PR-facing push. Push with hooks on.
 - [ ] Run the **unslop** skill before each commit and the **no-comments** skill before review.
 - [ ] Triage every Bugbot and security-reviewer comment per `../references/bugbot-triage.md`.
-- [ ] Rebase onto current trunk before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, or on a CI failure that comes from a change on trunk.
+- [ ] Rebase onto current trunk with `gt sync` and `gt restack` before the code-ready report and babysit. Keep that merge base in fix rounds. Rebase again only at merge prep, on a `git merge-tree` conflict with trunk, or on a CI failure that comes from a change on trunk.
 
 ### Verdict and merge, for every PR
 - [ ] At the code-ready head SHA and at each later push that changes the patch, run the swarm per `skills/swarm/SKILL.md`. One gates lane. The ten live lanes from the PR's **Verify, live** block. The perf lane from its **Verify, perf** block. Two or more audit lanes, each with its own focus, that read the diff and the receipts and distrust the PR body. The root audits the receipts in the merge-ready report before the verdict.
 - [ ] The live lanes run one at a time. There is one `omarchy-shell` per session and `omacast-verify launch` refuses to start while another run is active. Dispatch the ten lanes to one worker in sequence, or to several workers that retry `launch` until the lock frees. The audit and perf lanes still run in parallel with each other.
 - [ ] Clean only when every lane is `PASS`. Findings go back to the owner, including a defect that a lane filed as a note. A new head gets a fresh swarm and a fresh verdict, except for results that stay valid under the patch-id rule in `playbooks/shipping.md`.
-- [ ] The root appends a verified PR to the base-branch stack and the operator lands the stack bottom-up. Nobody merges. A later head on a parent restacks its children, and an earlier verdict survives only when `git patch-id` is unchanged, per `playbooks/shipping.md`.
+- [ ] The root leaves a verified PR in the Graphite stack and the operator lands the stack bottom-up with `gt merge` or the GitHub merge button. Nobody else merges. A later head on a parent restacks its children with `gt restack`, and an earlier verdict survives only when `git patch-id` is unchanged, per `playbooks/shipping.md`.
 
 ### Boot recipe, for every live lane
 Each live lane is a delegated worker at the PR head. Use `delegate_task` with `isolation: "worktree"` for an independent worker checkout. The surface is the launcher overlay inside the user's `omarchy-shell`, driven through `.agents/skills/verify-omacast/scripts/omacast-verify`, called `$V` below. There is no `preview_*` or `device_*` surface.
@@ -63,7 +65,7 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Edit `Backend.qml`. Register the `files` RPC group with `files.list`, `files.refresh`, `files.largeSubtrees` and `files.ignore`. Create `~/.config/omacast/file-search.ignore` with the defaults on first start, mode 0600.
 - [ ] Edit `bin/omacast`. `omacast doctor` prints the file count, the roots, the ignore file path and the large untouched subtrees.
 - [ ] Create `tests/file-index.test.js`. Edit `tests/privacy.test.js`.
-- [ ] Edit `SPEC.md §8.6` with the cold listing time once `cold.sh` has run.
+- [ ] Edit `SPEC.md §8.6` with the real home's first `files: listed` time after the operator's next reboot, beside the loop-image floor.
 
 **Build.**
 - [ ] `FileIndex.largeSubtrees` returns the topmost directories over the threshold with no signal inside, walking top down. Signals are the zoxide list and the active git repos, read once per refresh by `FileLister`.
@@ -86,19 +88,19 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Lane 2. First open after install. `$V launch`, `$V open`, `$V shot first-open`. Pass when the toast names `~/Applications/UnrealEngine` with its count and `$V call files.largeSubtrees` lists both vendor trees and not `~/Dev`.
 - [ ] Lane 3. Accept the toast. `$V open`, `$V key enter` on the toast, `$V shot toast-accepted`. Pass when `~/.config/omacast/file-search.ignore` gains the path, mode stays 0600, and the toast is gone on the next `$V open`.
 - [ ] Lane 4. Dismiss the toast. Remove the ignore line, `$V open`, `$V key escape`, `$V shot toast-dismissed`. Pass when `db/settings.json` holds `fileSearch.askedAt` for the path and the toast does not return on the next `$V open`.
-- [ ] Lane 5. Refresh timing. `$V open`, wait 31 s, `$V hide`, `$V open`. Pass when `qs log` shows exactly two `files: listed` lines and the second one is under 50 ms.
-- [ ] Lane 6. Refresh keeps the old list on failure. Point `files.refresh` at a root that does not exist through `$V call files.refresh '{"roots":["/nonexistent"]}'`. Pass when `files.list` still returns the previous count and `qs log` shows one `files: rg exited` warning.
-- [ ] Lane 7. Hidden config root. Pass when `$V call files.list` contains `~/.config/hypr/hyprland.lua` and contains no path under `~/.config/chromium`, `~/.config/zen`, `~/.ssh` or any `Cache/` directory.
+- [ ] Lane 5. Refresh timing. `$V open`, wait 31 s, `$V hide`, `$V open`. Save the `$V log 120` output as `refresh-timing.txt`. Pass when `qs log` shows exactly two `files: listed` lines and the second one is under 50 ms.
+- [ ] Lane 6. Refresh keeps the old list on failure. Point `files.refresh` at a root that does not exist through `$V call files.refresh '{"roots":["/nonexistent"]}'`. Save the `$V call` output as `refresh-keeps-the-old-list-on-failure.txt`. Pass when `files.list` still returns the previous count and `qs log` shows one `files: rg exited` warning.
+- [ ] Lane 7. Hidden config root. Save the `$V call` output as `hidden-config-root.txt`. Pass when `$V call files.list` contains `~/.config/hypr/hyprland.lua` and contains no path under `~/.config/chromium`, `~/.config/zen`, `~/.ssh` or any `Cache/` directory.
 - [ ] Lane 8. No query in argv. During `$V open`, run `ps -eo args | grep '[r]g '`. Save the output as `ps-argv.txt`. Pass when every `rg` line holds only `--files`, `--hidden`, `--ignore-file`, the ignore path and a root.
 - [ ] Lane 9. Doctor. `omacast doctor`. Save `doctor.txt`. Pass when it prints the file count, both roots, the ignore file path and the two vendor trees.
-- [ ] Lane 10. Uninstall leaves nothing extra. `bin/omacast uninstall`, then `$V launch` again. Pass when `~/.config/omacast/file-search.ignore` survives (it is user config) and `files.list` repopulates within 100 ms of the first open.
+- [ ] Lane 10. Uninstall leaves nothing extra. `bin/omacast uninstall`, then `$V launch` again. Save the `$V log 120` output as `uninstall-leaves-nothing-extra.txt`. Pass when `~/.config/omacast/file-search.ignore` survives (it is user config) and `files.list` repopulates within 100 ms of the first open.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 - [ ] Metric. Show-to-mapped and hide-to-unmapped latency from `tests/smoke.sh` at trunk and head. Trunk lacks the feature, so also the diff-added work, the warm refresh time from the `files: listed` log line, and the end state the user waits for, which is `files.list` populated after the first open.
 - [ ] Probe. Run `tests/smoke.sh` five times per side, alternating trunk and head, with no key driving in parallel. Read the refresh time from `qs log` on each head run.
 - [ ] Baseline. Record trunk's show-to-mapped median first. It was 59 to 66 ms on Omarchy 4.0.6.
 - [ ] Rule. Head's show-to-mapped median exceeds trunk's by more than 10 ms, fails. A warm refresh over 50 ms, fails. `files.list` empty 200 ms after the first open, fails.
-- [ ] Cold listing. The operator runs `sudo sysctl -w vm.drop_caches=3 && docs/phase7-prototypes/cold.sh` once and records the four numbers in `SPEC.md §8.6`. A cold listing over 1 s triggers the persistent index design in §8.6 and stops the program for a decision.
+- [ ] Cold listing on the real home. The loop-image floor from `docs/phase7-prototypes/cold-loop.sh` is 36 to 74 ms for the working list and 632 to 738 ms for the full home. Read the first `files: listed` line from `qs log` after the operator's next reboot and record it in `SPEC.md §8.6`. If the operator can run `sudo sysctl -w vm.drop_caches=3 && docs/phase7-prototypes/cold.sh`, record its numbers too. A real-home cold listing over 1 s triggers the persistent index design in §8.6 and stops the program for a decision.
 
 **Review gate.** The operator reviews before merge.
 - [ ] Copy lane 2 and lane 3 screenshots into `docs/screenshots/phase7/p7-1-review-toast.png` and `docs/screenshots/phase7/p7-1-review-accepted.png`.
@@ -147,7 +149,7 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Lane 7. Recent files. After lane 6's open and before its undo, `$V open`, `$V run builtin:search-files`, `$V shot files-recent`. Pass when "Recent & frequent files" lists `CLAUDE.md` first.
 - [ ] Lane 8. Stale reply dropped. `$V type "frecenc"` then `$V key backspace` six times within 500 ms, `$V shot files-after-backspace`. Pass when the rows match the one-letter query and `qs log` shows dropped replies for the longer queries.
 - [ ] Lane 9. Back out. `$V key shift+escape`, `$V shot files-popped`. Pass when the root view shows and the query is empty.
-- [ ] Lane 10. Keystroke budget. `$V type "s"` then `$V type "p"` with `qs log` open. Pass when every `files: ranked` line is under 10 ms and the rows update within 50 ms of each key, read from the log timestamps.
+- [ ] Lane 10. Keystroke budget. `$V type "s"` then `$V type "p"` with `qs log` open. Save the `$V log 120` output as `keystroke-budget.txt`. Pass when every `files: ranked` line is under 10 ms and the rows update within 50 ms of each key, read from the log timestamps.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 - [ ] Metric. Root keystroke latency, the `rootSearch.search` call time for `firefox` at trunk and head. Trunk lacks the view, so also the diff-added work, the `files: ranked` time per keystroke over the dev machine's list, and the end state the user waits for, which is the rows for the current query visible.
@@ -191,16 +193,16 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] `tests/privacy.test.js` passes unchanged, which proves no new `command:` carries user text. Run `node --test tests/privacy.test.js`.
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the `swarm workers` role in `p3-models.md` at the PR head, per the boot recipe.
-- [ ] Lane 1. Regression lane against trunk. At trunk and head, `$V run builtin:search-files`, `$V type "readme"`, time to first rows from `qs log`. Pass when head's time is within 10 ms of trunk's and the preview pane does not delay the rows.
+- [ ] Lane 1. Regression lane against trunk. At trunk and head, `$V run builtin:search-files`, `$V type "readme"`, time to first rows from `qs log`. Save the `$V log 120` output as `regression-lane-against-trunk.txt`. Pass when head's time is within 10 ms of trunk's and the preview pane does not delay the rows.
 - [ ] Lane 2. Text preview. `$V type "claude"`, wait 200 ms, `$V shot preview-text`. Pass when the pane shows the first lines of `CLAUDE.md`.
 - [ ] Lane 3. Image preview. `$V type "png"`, `$V shot preview-image`. Pass when the pane shows the image and its dimensions.
 - [ ] Lane 4. Large file. Create a 2 MB text file in a temp dir under `$HOME`, refresh, select it, `$V shot preview-large`. Pass when the pane shows metadata only. Delete the file.
 - [ ] Lane 5. Copy Path. Select `SPEC.md`, `$V key ctrl+k`, choose Copy Path, `$V shot copy-path-hud`. Pass when `wl-paste -n` prints the absolute path and the HUD says "Copied".
-- [ ] Lane 6. Show in Folder. Select `SPEC.md`, choose Show in Folder. Pass when `hyprctl clients -j` gains a window whose title contains `oma-cast` within 2 s. Close it.
+- [ ] Lane 6. Show in Folder. Select `SPEC.md`, choose Show in Folder. Save the `$V log 120` output as `show-in-folder.txt`. Pass when `hyprctl clients -j` gains a window whose title contains `oma-cast` within 2 s. Close it.
 - [ ] Lane 7. Move to Trash. Create `~/omacast-trash-test.txt`, refresh, select it, choose Move to Trash, `$V shot trash-alert`, `$V key enter`. Pass when the file is gone, `~/.local/share/Trash/files/omacast-trash-test.txt` exists with a matching `.trashinfo`, and the row disappears. Remove both trash entries.
-- [ ] Lane 8. Trash cancelled. Repeat lane 7 up to the alert, `$V key escape`. Pass when the file is still in place and the row is still listed.
+- [ ] Lane 8. Trash cancelled. Repeat lane 7 up to the alert, `$V key escape`. Save the `$V log 120` output as `trash-cancelled.txt`. Pass when the file is still in place and the row is still listed.
 - [ ] Lane 9. Quick Look. Select `CLAUDE.md`, `$V key ctrl+y`, `$V shot quick-look`, `$V key escape`. Pass when the larger preview covers the list and Esc returns to the list with the same selection.
-- [ ] Lane 10. No argv leak. During a preview of a file whose name holds a space, `ps -eo args | grep '[p]dftotext\|[w]l-copy'`. Pass when no process line contains typed query text, only file paths.
+- [ ] Lane 10. No argv leak. During a preview of a file whose name holds a space, `ps -eo args | grep '[p]dftotext\|[w]l-copy'`. Save the `ps` output as `no-argv-leak.txt`. Pass when no process line contains typed query text, only file paths.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 - [ ] Metric. Time from a selection change to the preview painted, from the `files: preview` log line, at head. Trunk lacks the pane, so the diff-added work is the preview load and the end state is the painted pane. Also the rows time at trunk and head from lane 1.
@@ -249,7 +251,7 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Lane 5. Open from root. `$V type "claude"`, `$V key ctrl+2` on the Files row if Results has rows, else `$V key enter`, `$V shot root-open-hud`. Pass when the HUD names `CLAUDE.md` and the launcher hides. Undo the frecency record.
 - [ ] Lane 6. Alias keeps the top. Set an alias `spec` on Calculator History, `$V type "spec"`, `$V shot root-alias`. Pass when the alias row is first and no Files section shows. Remove the alias.
 - [ ] Lane 7. Stale reply. `$V type "frecenc"` then six `$V key backspace` within 500 ms, `$V shot root-after-backspace`. Pass when the rows belong to `f` and `qs log` shows dropped replies.
-- [ ] Lane 8. Hide during search. `$V type "spec"` then `$V hide` within 20 ms, `$V open`. Pass when the rows shown belong to the surviving query and no QML error is logged.
+- [ ] Lane 8. Hide during search. `$V type "spec"` then `$V hide` within 20 ms, `$V open`. Save the `$V log 120` output as `hide-during-search.txt`. Pass when the rows shown belong to the surviving query and no QML error is logged.
 - [ ] Lane 9. Compact mode. With `compact` on, `$V open`, `$V type "spec"`, `$V shot root-compact`. Pass when the Files section appears without breaking the compact layout.
 - [ ] Lane 10. Zoom. `$V key ctrl+plus` twice, `$V type "spec"`, `$V shot root-zoomed`, `$V key ctrl+0`. Pass when file rows scale with the others.
 
@@ -301,10 +303,10 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Lane 3. Too short. `$V type "fr"`, wait 400 ms, `$V shot content-fr`. Pass when no Contents section shows.
 - [ ] Lane 4. Space opens it. `$V type "zoxide q"`, wait 400 ms, `$V shot content-space`. Pass when the Contents section shows.
 - [ ] Lane 5. Cancel on keystroke. `$V type "frec"`, wait 400 ms, `$V type "e"` immediately followed by `$V shot content-cancel` within 100 ms. Pass when the Contents section is empty or belongs to `frece`, and `qs log` shows `content: cancelled`.
-- [ ] Lane 6. Stale ↵. `$V type "frec"`, wait 400 ms, `$V key down` to a content row, `$V type "x"`, `$V key enter` within 100 ms. Pass when nothing opens (no HUD, no new window in `hyprctl clients -j`) or the opened row belongs to `frecx`.
+- [ ] Lane 6. Stale ↵. `$V type "frec"`, wait 400 ms, `$V key down` to a content row, `$V type "x"`, `$V key enter` within 100 ms. Save the `$V log 120` output as `stale.txt`. Pass when nothing opens (no HUD, no new window in `hyprctl clients -j`) or the opened row belongs to `frecx`.
 - [ ] Lane 7. Forced contents. `$V type "copyright"`, `$V key ctrl+p`, choose Contents, `$V shot content-forced`. Pass when up to 20 content rows show and the name rows are hidden.
 - [ ] Lane 8. No argv leak. During lane 2, `ps -eo args | grep '[r]g '`. Save `ps-argv.txt`. Pass when the `rg` line holds `--json -F -i -f - --max-filesize 1M --ignore-file <path> <root>` and nothing else.
-- [ ] Lane 9. Hide kills it. `$V type "frec"`, `$V hide` within 50 ms. Pass when `pgrep -f 'rg --json'` is empty 200 ms later and `qs log` shows `content: cancelled`.
+- [ ] Lane 9. Hide kills it. `$V type "frec"`, `$V hide` within 50 ms. Save the `$V log 120` output as `hide-kills-it.txt`. Pass when `pgrep -f 'rg --json'` is empty 200 ms later and `qs log` shows `content: cancelled`.
 - [ ] Lane 10. Open a content row. `$V type "searchmatch"`, wait 400 ms, `$V key down` to the first content row, `$V key enter`, `$V shot content-open-hud`. Pass when the HUD names the file and the frecency record holds its path. Undo the record.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
@@ -346,13 +348,13 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Lane 1. Regression lane against trunk. At trunk and head, `$V run builtin:search-files`, `$V shot files-recent`. Trunk lists only omacast opens. Pass when head lists the same rows plus the Neovim rows below them when omacast opens exist, and the rows time is within 10 ms of trunk's.
 - [ ] Lane 2. A new mark. `nvim --headless +'e ~/Projects/oma-cast/core/Ranker.js' +wshada +q`, `$V open`, `$V run builtin:search-files`, `$V shot shada-recent`. Pass when `Ranker.js` is listed.
 - [ ] Lane 3. No lift. Open `~/Dev/sales-crm/README.md` in Neovim ten times, `$V type "readme"`, `$V shot shada-no-lift`. Pass when it ranks inside its band by usage and does not jump a band.
-- [ ] Lane 4. Missing file. Move `main.shada` aside, `$V launch`. Pass when `qs log` shows `signals: shada absent` and no QML error. Restore it.
+- [ ] Lane 4. Missing file. Move `main.shada` aside, `$V launch`. Save the `$V log 120` output as `missing-file.txt`. Pass when `qs log` shows `signals: shada absent` and no QML error. Restore it.
 - [ ] Lane 5. Corrupt file. Truncate a copy of `main.shada` to 100 bytes, point the service at it through `$V call files.refresh`, `$V shot shada-corrupt`. Pass when the launcher works and the log shows the rows read before the cut.
-- [ ] Lane 6. Large file. Write a 2 MB shada with `nvim --headless` over a loop of 5,000 files. Pass when `signals: shada` reports under 50 ms.
-- [ ] Lane 7. Private paths. Mark `~/.ssh/config` in Neovim. Pass when it never appears in "Recent & frequent files" because the private-path filter applies to signals too.
-- [ ] Lane 8. Refresh cadence. Mark a file, `$V open` within 30 s. Pass when the row appears only after the next refresh, per the 30 s rule.
-- [ ] Lane 9. Argv. `ps -eo args | grep '[n]vim'` during a refresh. Pass when omacast spawned no nvim process, since the file is read directly.
-- [ ] Lane 10. Doctor. `omacast doctor`. Pass when it prints the shada path, its size and the row count.
+- [ ] Lane 6. Large file. Write a 2 MB shada with `nvim --headless` over a loop of 5,000 files. Save the `$V log 120` output as `large-file.txt`. Pass when `signals: shada` reports under 50 ms.
+- [ ] Lane 7. Private paths. Mark `~/.ssh/config` in Neovim. Save the `$V log 120` output as `private-paths.txt`. Pass when it never appears in "Recent & frequent files" because the private-path filter applies to signals too.
+- [ ] Lane 8. Refresh cadence. Mark a file, `$V open` within 30 s. Save the `$V log 120` output as `refresh-cadence.txt`. Pass when the row appears only after the next refresh, per the 30 s rule.
+- [ ] Lane 9. Argv. `ps -eo args | grep '[n]vim'` during a refresh. Save the `ps` output as `argv.txt`. Pass when omacast spawned no nvim process, since the file is read directly.
+- [ ] Lane 10. Doctor. `omacast doctor`. Save the `omacast doctor` output as `doctor.txt`. Pass when it prints the shada path, its size and the row count.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 - [ ] Metric. The refresh time from `files: listed` at trunk and head. Trunk lacks the signal, so also the diff-added work, the `signals: shada` time, and the end state, the recent list painted after a refresh.
@@ -370,7 +372,7 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 
 ## Close the program
 - [ ] Every box above is checked with its evidence.
-- [ ] Update the Status section of `CLAUDE.md` with what works, what is stubbed and the deviations, and record the cold listing numbers in `SPEC.md §8.6`.
+- [ ] Update the Status section of `CLAUDE.md` with what works, what is stubbed and the deviations.
 - [ ] Reply to the operator with the report the execution playbook names.
 
 ## Appendix A. Prototype evidence
@@ -381,7 +383,7 @@ The prototypes ran on 2026-11-04 on the dev machine from the scratch directory a
 - Content-reveal gate. Settled. Fewer than 5 substring name hits or a space, at 3 characters or more. Subsequence counting would delay `frecency` by three keystrokes. `reveal.js`.
 - Warm and content-cold search timing. Settled. 24 to 25 ms warm, 148 to 156 ms with file pages evicted, bound by the walk and the file opens, not by matching. `content.sh`, `evict.py`.
 - Matcher in Qt's JS engine. Settled. A character loop costs 45 to 52 ms per keystroke over 14,949 names, a per-name `RegExp` 1 to 4 ms. `v4.qml`, `v4re.qml`.
-- Disk-cold listing. Unproven. It needs root to drop the directory cache and the machine's sudo rules do not allow it. `cold.sh` is ready for the operator and P7-1's perf block records the result.
+- Disk-cold listing. Settled as a floor, without root. The listed tree copied into a btrfs image, mounted through udisks and evicted between rounds, lists in 36 to 74 ms cold (median 45, 1,142 reads) and the full home in 632 to 738 ms cold (12,407 reads), five rounds each, bound by 39 to 52 µs per read through the loop device. The fragmented real home needs more reads, so P7-1 records the first listing after a reboot. `cold-loop.sh`, with `cold.sh` for an operator with root.
 - Neovim shada signal. Unproven. The dev machine's file is 267 bytes. P7-6 is last and may be dropped.
 
 ## Appendix B. Alternatives rejected
@@ -396,18 +398,19 @@ The prototypes ran on 2026-11-04 on the dev machine from the scratch directory a
 
 ## Appendix C. Risks
 - One shared shell instance. Live lanes cannot run in parallel. P7-1 through P7-6. The root serialises the live lanes and the owner never drives the launcher while the operator types.
-- The cold listing is unmeasured. P7-1. The owner asks the operator to run `cold.sh` once and stops the program if the cold listing exceeds 1 s.
+- The cold listing was measured on a fresh copy, not on the fragmented real home. P7-1. The floor is 36 to 74 ms against a 1 s trigger, so the owner records the real home's first listing after a reboot and stops the program only if it exceeds 1 s.
 - The vendor trees change. The spec was written against three Unreal copies in `$HOME` and this plan against one under `~/Applications`. P7-1. The owner reruns `detect.py` at the head and records the current trees in the PR body.
 - The 20,000-entry helper catalog. P7-2 does not use the helper for files, so the file list has no cap but the keystroke budget. P7-2's perf block watches the `files: ranked` time and the owner files the helper catalog as a follow-up if the list passes 50,000.
 - `rg --json` output size. A query with thousands of matches produces many megabytes before the 300 ms kill. P7-5. `--max-count 1` per file and the kill timer bound it, and lane 7 checks the forced `copyright` case.
 - Move to Trash on btrfs subvolumes and other mounts. P7-3. The owner tests a file on a second mount if one exists, otherwise records the gap.
 - The shada signal may stay empty on the dev machine. P7-6. The owner writes the fixture with `nvim --headless` and the PR may be dropped.
 - `p3-models.md` is absent. All PRs. The root runs `setup-p3` before spawning.
+- The fork is not synced with Graphite, so `gt submit` refuses it. All PRs. The owner opens the PR with `gh` on the `gt` branch per the PR mechanics until the operator syncs the fork, and the stack shape is unchanged either way.
 - The formal model drifts. P7-4 and P7-5 add messages to `SearchOrdering.tla`. `check.sh` exits 3 on an unsynced anchor and the owner re-syncs before claiming a pass.
 
 ## Appendix D. Links and reading list
 - `SPEC.md §8.6` for every decision and its evidence. `SPEC.md §12` Phase 7 for the acceptance checks. `SPEC.md §0` rules 5 and 6.
-- `docs/phase7-prototypes/README.md` for the numbers, with the scripts beside it.
+- `docs/phase7-prototypes/README.md` for the numbers, with the scripts beside it. `cold-loop.sh` reruns the cold measurement without root.
 - `.agents/skills/verify-omacast/SKILL.md`, the control skill for every live lane. `.agents/skills/verify-search-ordering/SKILL.md` for P7-4 and P7-5.
 - `services/NativeSearch.qml`, `Backend.qml` `searchAsync` and `ui/LauncherWindow.qml` `rebuild` for the serial guard that the file and content sources reuse.
 - `core/Frecency.js` and `core/RootSearch.js` for the usage formula and the section builder.
