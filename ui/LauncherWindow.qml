@@ -138,6 +138,8 @@ PanelWindow {
     window.backend.cancelSearch()
     window.searchPending = false
     window.closePopups()
+    window.toast = null
+    toastTimer.stop()
     var seconds = Number(window.general.popToRootTimeout)
     if (!(seconds > 0)) window.popToRoot()
     else { popTimer.interval = seconds * 1000; popTimer.restart() }
