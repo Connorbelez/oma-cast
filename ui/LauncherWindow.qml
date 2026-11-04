@@ -127,6 +127,8 @@ PanelWindow {
     window.closePopups()
     window.historyIndex = -1
     window.rebuild(true)
+    var fileToast = window.backend.callSync("files.takeToast", null)
+    if (fileToast.ok && fileToast.data) window.showToast(fileToast.data.style, fileToast.data.title, fileToast.data.actions)
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 
@@ -136,6 +138,8 @@ PanelWindow {
     window.backend.cancelSearch()
     window.searchPending = false
     window.closePopups()
+    window.toast = null
+    toastTimer.stop()
     var seconds = Number(window.general.popToRootTimeout)
     if (!(seconds > 0)) window.popToRoot()
     else { popTimer.interval = seconds * 1000; popTimer.restart() }

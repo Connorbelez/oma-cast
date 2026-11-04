@@ -31,7 +31,7 @@ Preconditions:
 
 ## Gotchas
 
-- A toast outlives hide/show: `$V open` can still show the last one. Assert the toast right after the action.
+- Hide clears the toast (since P7-1 on 2026-11-04), so assert it right after the action and before any hide.
 - While a search is pending, Ctrl+K shows an empty panel by design (`actionsForSelected` returns `[]`). Wait 0.3 s after typing.
 - With `navigationBindings` set to `vim-motions`, the panel is on Alt+K. Check with `$V call settings.getGeneralSettings`.
 - Disable Command (Alt+Shift+D) hides the command, and there's no settings window to bring it back. Undo it right away with Ctrl+T → Undo.

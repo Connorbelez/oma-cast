@@ -3,7 +3,7 @@ const assert = require("node:assert/strict")
 const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
-const { spawnSync } = require("node:child_process")
+const { spawn, spawnSync } = require("node:child_process")
 const Paths = require("../core/Paths.js")
 
 // Marketplace review: histories must stay private under a normal umask 022,
@@ -137,5 +137,169 @@ test("no QML hands clipboard text or prompts to a process's argv", () => {
   for (const file of files) {
     const source = fs.readFileSync(path.join(root, file), "utf8")
     assert.doesNotMatch(source, /\["wl-copy"|omarchy-clipboard-paste-text"|omarchy-agent/, file)
+  }
+})
+
+// File search: rg gets flags, roots and omacast's own ignore files, nothing a
+// user typed. Every element of every `command:` array in FileLister.qml must be
+// a quoted literal or one of these properties.
+const FILE_LISTER_ARGS = {
+  "lister.home": "the home root",
+  "homeRun.root": "a root, absolute (Backend.checkFilePath)",
+  "configRun.root": "a root, absolute (Backend.checkFilePath)",
+  "lister.ignoreFile": "~/.config/omacast/file-search.ignore",
+  "lister.untouchedFile": "the large untouched subtrees, as ignore patterns",
+  "lister.listScript": "a constant script",
+  "lister.signalsScript": "a constant script",
+  "lister.writeScript": "a constant script",
+  "FileIndex.RECOUNT_SCRIPT": "a constant script",
+  "FileIndex.COUNT_PROGRAM": "a constant awk program",
+  "String(FileIndex.DEFAULT_THRESHOLD)": "a constant number",
+  "writer.mode": "create, append or replace",
+  "writer.path": "one of omacast's own files"
+}
+
+function fileListerSource() {
+  return fs.readFileSync(path.join(root, "services/FileLister.qml"), "utf8")
+}
+
+test("every process FileLister starts has fixed argv", () => {
+  const source = fileListerSource()
+  const commands = [...source.matchAll(/command:\s*\[([^\]]*)\]/g)].map((m) => m[1].split(",").map((s) => s.trim()))
+  assert.equal(commands.length, 5)
+  for (const argv of commands) {
+    for (const arg of argv) assert.ok(/^"[^"$`\\]*"$/.test(arg) || arg in FILE_LISTER_ARGS, `${arg} in [${argv}]`)
+  }
+  const saves = [...source.matchAll(/lister\.save\(([^,]+),\s*([^,]+),/g)].map((m) => [m[1].trim(), m[2].trim()])
+  assert.ok(saves.length >= 4)
+  for (const [mode, file] of saves) {
+    assert.match(mode, /^"(create|append|replace)"$/)
+    assert.ok(["lister.ignoreFile", "lister.untouchedFile", "lister.stateFile"].includes(file), file)
+  }
+})
+
+function fileListerScript(name) {
+  const source = fileListerSource()
+  const single = source.match(new RegExp("property string " + name + ": '([^']*)'"))
+  if (single) return single[1]
+  return JSON.parse(source.match(new RegExp("property string " + name + ': ("(?:[^"\\\\]|\\\\.)*")'))[1])
+}
+
+test("the file-search write script makes 0600 files under umask 022 and never clobbers on create", (t) => {
+  const home = tempHome(t)
+  const script = fileListerScript("writeScript")
+  const run = (mode, file, input) => spawnSync("bash", ["-c", 'umask 022; exec bash -c "$@"', "umask-022", script, "omacast-files", mode, file], { input, encoding: "utf8" })
+  const file = home + "/file-search.ignore"
+  assert.equal(run("create", file, "node_modules/\n").status, 0)
+  assert.equal(run("create", file, "overwritten\n").status, 0)
+  assert.equal(run("append", file, "/Applications/UnrealEngine/\n").status, 0)
+  assert.equal(fs.readFileSync(file, "utf8"), "node_modules/\n/Applications/UnrealEngine/\n")
+  assert.equal(mode(file), 0o600)
+  const state = home + "/file-search.json"
+  assert.equal(run("replace", state, "{}\n").status, 0)
+  assert.equal(run("replace", state, '{"files":1}\n').status, 0)
+  assert.equal(fs.readFileSync(state, "utf8"), '{"files":1}\n')
+  assert.equal(mode(state), 0o600)
+  assert.deepEqual(fs.readdirSync(home).sort(), ["file-search.ignore", "file-search.json"])
+  assert.notEqual(run("delete", state, "").status, 0)
+})
+
+test("a write never goes through a .tmp a killed write left behind", (t) => {
+  const home = tempHome(t)
+  const script = fileListerScript("writeScript")
+  const run = (mode, file, input) => spawnSync("bash", ["-c", 'umask 022; exec bash -c "$@"', "umask-022", script, "omacast-files", mode, file], { input, encoding: "utf8" })
+  const victim = home + "/victim"
+  fs.writeFileSync(victim, "keep\n", { mode: 0o644 })
+  for (const [kind, name] of [["replace", "file-search.json"], ["create", "file-search.ignore"]]) {
+    const file = `${home}/${name}`
+    fs.symlinkSync(victim, file + ".tmp")
+    assert.equal(run(kind, file, "new\n").status, 0, kind)
+    assert.equal(fs.lstatSync(file).isFile(), true, kind)
+    assert.equal(fs.readFileSync(file, "utf8"), "new\n", kind)
+    assert.equal(mode(file), 0o600, kind)
+    assert.equal(fs.readFileSync(victim, "utf8"), "keep\n", kind)
+  }
+  assert.deepEqual(fs.readdirSync(home).sort(), ["file-search.ignore", "file-search.json", "victim"])
+})
+
+test("a create killed before its content arrives leaves no file behind for the next create to skip", async (t) => {
+  const home = tempHome(t)
+  const file = home + "/file-search.ignore"
+  const script = fileListerScript("writeScript")
+  const child = spawn("bash", ["-c", script, "omacast-files", "create", file], { stdio: ["pipe", "ignore", "ignore"], detached: true })
+  const exited = new Promise((resolve) => child.on("exit", resolve))
+  for (let i = 0; i < 200 && !fs.readdirSync(home).length; i++) await new Promise((r) => setTimeout(r, 10))
+  assert.ok(fs.readdirSync(home).length, "the redirect ran")
+  process.kill(-child.pid, "SIGKILL")
+  await exited
+  assert.equal(fs.existsSync(file), false)
+  const r = spawnSync("bash", ["-c", script, "omacast-files", "create", file], { input: "node_modules/\n", encoding: "utf8" })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fs.readFileSync(file, "utf8"), "node_modules/\n")
+  assert.equal(mode(file), 0o600)
+  assert.deepEqual(fs.readdirSync(home), ["file-search.ignore"])
+})
+
+// rg lists every file, private paths included, when an --ignore-file is
+// missing or unreadable, and still exits 0.
+test("the list script runs rg with fixed flags only while both ignore files are readable", (t) => {
+  const home = tempHome(t)
+  const log = home + "/cmdlines"
+  fs.writeFileSync(home + "/rg", '#!/bin/bash\necho "$*" >>"$LOG"\n', { mode: 0o755 })
+  const ignore = home + "/file-search.ignore"
+  const untouched = home + "/file-search-untouched.ignore"
+  fs.writeFileSync(ignore, ".ssh/\n")
+  fs.writeFileSync(untouched, "")
+  const list = (...args) => spawnSync("bash", ["-c", fileListerScript("listScript"), "omacast-files", ...args], {
+    encoding: "utf8", env: { ...process.env, LOG: log, PATH: home + ":" + process.env.PATH }
+  }).status
+  assert.equal(list("/home/u", ignore, untouched), 0)
+  assert.equal(list("/home/u/.config", ignore, untouched, "--hidden"), 0)
+  fs.mkdirSync(home + "/dir.ignore")
+  assert.equal(list("/home/u", home + "/dir.ignore", untouched), 3)
+  if (process.getuid() !== 0) {
+    fs.chmodSync(untouched, 0o000)
+    assert.equal(list("/home/u", ignore, untouched), 3)
+  }
+  fs.rmSync(untouched)
+  fs.mkdirSync(untouched)
+  assert.equal(list("/home/u", ignore, untouched), 3)
+  fs.rmSync(ignore)
+  assert.equal(list("/home/u/.config", ignore, home + "/rg", "--hidden"), 3)
+  assert.equal(fs.readFileSync(log, "utf8"), [
+    `--files --ignore-file ${ignore} --ignore-file ${untouched} /home/u`,
+    `--files --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`,
+    ""
+  ].join("\n"))
+})
+
+test("the usage-signal script passes only fixed flags and the home dir to zoxide and fd", (t) => {
+  const home = tempHome(t)
+  const log = home + "/cmdlines"
+  const fake = '#!/bin/bash\ntr "\\0" " " </proc/$$/cmdline >>"$LOG"; echo >>"$LOG"\n'
+  fs.writeFileSync(home + "/zoxide", fake + 'echo "  2.0 /home/u/Dev"\n', { mode: 0o755 })
+  fs.writeFileSync(home + "/fd", fake + 'echo "/home/u/Work/repo/.git/logs/HEAD"\n', { mode: 0o755 })
+  const r = spawnSync("bash", ["-c", fileListerScript("signalsScript"), "omacast-signals", "/home/u"], {
+    encoding: "utf8", env: { ...process.env, LOG: log, PATH: home + ":" + process.env.PATH }
+  })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, "  2.0 /home/u/Dev\n/home/u/Work/repo/.git/logs/HEAD\n")
+  assert.deepEqual(fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => l.trim().replace(/^\/bin\/bash \S+\/(\w+)/, "$1")), [
+    "zoxide query --list --score",
+    "fd -H -t f -p /\\.git/logs/HEAD$ --changed-within 14d --max-depth 8 --exclude node_modules /home/u"
+  ])
+})
+
+// rg anchors --ignore-file patterns at its working directory, and a path
+// fd prints relative to some other directory never matches a tree. A
+// FIFO or a hung mount blocks rg and fd, and only timeout's process group
+// reaches the pipeline and fd behind bash.
+test("every process that walks the home dir starts in it, under timeout", () => {
+  const blocks = fileListerSource().split("\n  Process {").slice(1).map((b) => b.split("\n  }")[0])
+  const walkers = blocks.filter((b) => /command:.*(listScript|signalsScript|RECOUNT_SCRIPT)/.test(b))
+  assert.equal(walkers.length, 4)
+  for (const b of walkers) {
+    assert.match(b, /\n    workingDirectory: lister\.home\n/, b.split("\n")[1])
+    assert.match(b, /\n    command: \["timeout", "-k", "2", "(15|60)", "bash", "-c", /, b.split("\n")[1])
   }
 })
