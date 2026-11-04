@@ -12,6 +12,7 @@ import "core/Frecency.js" as Frecency
 import "core/OmarchyMenu.js" as OmarchyMenu
 import "core/RootSearch.js" as RootSearch
 import "core/Calculator.js" as Calculator
+import "core/FileIndex.js" as FileIndex
 import "services"
 
 Item {
@@ -200,6 +201,32 @@ Item {
     var list = calculatorStore.loaded ? calculatorStore.doc.history : []
     for (var i = 0; i < list.length; i++) if (list[i].id === key) return list[i]
     return null
+  }
+
+  // ------------------------------------------------------------ file search
+
+  function fileSearchSettings() {
+    var saved = settingsStore.loaded && settingsStore.doc.fileSearch
+    return { askedAt: (saved && saved.askedAt) || {} }
+  }
+
+  // A path that reaches rg's argv or the ignore file: absolute, so it cannot
+  // read as a flag, and one line, so it cannot add a second pattern.
+  function checkFilePath(value) {
+    var path = String(value || "")
+    if (path.charAt(0) !== "/" || /[\n\r\0]/.test(path)) throw new Error("Expected an absolute path, got " + JSON.stringify(path))
+    return path.replace(/\/+$/, "") || "/"
+  }
+
+  FileLister {
+    id: fileLister
+    ready: backend.directoriesReady
+    home: backend.paths.home
+    configRoot: backend.paths.config.slice(0, backend.paths.config.lastIndexOf("/"))
+    ignoreFile: backend.paths.config + "/file-search.ignore"
+    untouchedFile: backend.paths.cache + "/file-search-untouched.ignore"
+    stateFile: backend.paths.cache + "/file-search.json"
+    onMessage: function(level, text, metadata) { backend.log(level, "", text, metadata) }
   }
 
   // ------------------------------------------------------------- execution
@@ -520,6 +547,65 @@ Item {
       }
     })
 
+    Rpc.register(backend.registry, "files", {
+      // qs ipc drops replies over about 200 KB, so paths come in pages.
+      list: function(data) {
+        var under = data && data.under ? backend.checkFilePath(data.under) + "/" : ""
+        var rows = under ? fileLister.rows.filter(function(r) { return r.path.indexOf(under) === 0 }) : fileLister.rows
+        var offset = Math.max(0, Number(data && data.offset) || 0)
+        var limit = Math.min(1000, Math.max(0, data && data.limit !== undefined ? Number(data.limit) || 0 : 100))
+        return {
+          count: fileLister.rows.length,
+          matched: rows.length,
+          roots: fileLister.roots,
+          ignoreFile: fileLister.ignoreFile,
+          listedAt: fileLister.listedAt || null,
+          listMs: fileLister.listMs,
+          refreshing: fileLister.refreshing,
+          paths: rows.slice(offset, offset + limit).map(function(r) { return r.path })
+        }
+      },
+      refresh: function(data) {
+        var roots = data && data.roots !== undefined ? data.roots : fileLister.defaultRoots
+        if (!Array.isArray(roots) || roots.length < 1 || roots.length > 2) throw new Error("roots must be one or two absolute paths")
+        roots.forEach(function(r) { backend.checkFilePath(r) })
+        return { started: fileLister.refresh(roots) }
+      },
+      largeSubtrees: function() {
+        var askedAt = backend.fileSearchSettings().askedAt
+        return {
+          threshold: FileIndex.DEFAULT_THRESHOLD,
+          recountedAt: fileLister.recountedAt || null,
+          files: fileLister.recountFiles,
+          subtrees: fileLister.subtrees.map(function(t) {
+            return {
+              path: t.path, display: FileIndex.displayPath(t.path, backend.paths.home), count: t.count,
+              ignored: FileIndex.ignores(fileLister.ignoreText, backend.paths.home, t.path), askedAt: askedAt[t.path] || null
+            }
+          })
+        }
+      },
+      ignore: function(data) {
+        var path = backend.checkFilePath(data && data.path)
+        if (path.indexOf(backend.paths.home + "/") !== 0) throw new Error("Only paths under " + backend.paths.home + " go in the ignore file")
+        return fileLister.ignore(path)
+      },
+      // The large-subtree toast for this open, at most once per tree per
+      // FileIndex.ASK_AGAIN_MS. Taking it records the ask.
+      takeToast: function() {
+        if (!settingsStore.loaded || settingsStore.readOnly) return null
+        var now = Date.now()
+        var tree = FileIndex.treeToAsk(fileLister.subtrees, backend.fileSearchSettings().askedAt, fileLister.ignoreText, backend.paths.home, now)
+        if (!tree) return null
+        settingsStore.update(function(doc) {
+          doc.fileSearch = doc.fileSearch || {}
+          doc.fileSearch.askedAt = doc.fileSearch.askedAt || {}
+          doc.fileSearch.askedAt[tree.path] = now
+        })
+        return FileIndex.toastFor(tree, backend.paths.home, "files.ignore")
+      }
+    })
+
     Rpc.register(backend.registry, "frecency", {
       visit: function(data) { backend.recordVisit(String(data.id), String(data.query || "")); return null },
       get: function(data) {
@@ -553,6 +639,9 @@ Item {
     if (method === "window.visibilityChanged" && data && data.visible) {
       menuSource.refresh()
       calculatorData.refresh()
+      fileLister.opened()
+    } else if (method === "window.visibilityChanged") {
+      fileLister.hidden()
     }
   }
 
