@@ -105,6 +105,22 @@ test("parseList splits rg output into path, name and dir", () => {
   assert.deepEqual(FileIndex.parseList(""), [])
 })
 
+test("listOutcome swaps in the list only when every run exited normally with 0", () => {
+  const run = (root, exitCode, exitStatus, text) => ({ root, exitCode, exitStatus, text })
+  const home = run(HOME, 0, 0, `${HOME}/a\n`)
+  assert.deepEqual(FileIndex.listOutcome([home, run(`${HOME}/.config`, 0, 0, `${HOME}/.config/b\n`)]), {
+    rows: [{ path: `${HOME}/a`, name: "a", dir: HOME }, { path: `${HOME}/.config/b`, name: "b", dir: `${HOME}/.config` }]
+  })
+  assert.deepEqual(FileIndex.listOutcome([home, run(`${HOME}/.config`, 0, 1, `${HOME}/.config/b\n`)]), {
+    warnings: [`files: rg exited abnormally for ${HOME}/.config; keeping the previous list`]
+  })
+  assert.deepEqual(FileIndex.listOutcome([run(HOME, 2, 0, `${HOME}/a\n`), run("/nonexistent", 2, 0, "")]), {
+    warnings: [`files: rg exited 2 for ${HOME}; keeping the previous list`, "files: rg exited 2 for /nonexistent; keeping the previous list"]
+  })
+  assert.deepEqual(FileIndex.listOutcome([run(HOME, 3, 0, ""), home]), { missing: true })
+  assert.deepEqual(FileIndex.listOutcome([run(HOME, 3, 1, ""), home]), { warnings: [`files: rg exited abnormally for ${HOME}; keeping the previous list`] })
+})
+
 test("parseSignals reads zoxide scores and git reflog paths", () => {
   const text = `   2.0 ${HOME}/Projects/oma-cast\n  0.8 ${HOME}/Dev cool\n${HOME}/Work/repo/.git/logs/HEAD\nnoise\n`
   assert.deepEqual(FileIndex.parseSignals(text), [`${HOME}/Projects/oma-cast`, `${HOME}/Dev cool`, `${HOME}/Work/repo`])
