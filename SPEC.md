@@ -84,6 +84,9 @@ and timeout all have a bounded fallback. Build-time dependencies are Rust, serde
 system daemon. Flea's source provenance and license live in `search/`. Results update the existing ListModel in place and reuse visible delegates, following Flea 0.3.12's stable-model technique. Unchanged answers produce no model writes.
 
 
+**File search [D, 2026-11-04].** File search uses `ripgrep` (an Omarchy base package) plus omacast's own filtering and ranking, not a persistent index. Large untouched subtrees are detected and demoted, files are ranked by match band, then personal usage, then the folder-tree prior, and content results appear only when name matches are few. See §8.6. A persistent index is a later upgrade with measured triggers.
+
+
 **This supersedes the Tauri + Node design below for Omarchy.** Omarchy's desktop (bar, menus, launcher, notifications, lock screen) runs in one long-lived Quickshell process, `omarchy-shell`, whose features are plugins. omacast is one more plugin there, built the way Omarchy builds its own menu and emoji picker. The reasons:
 - **No external dependencies.** No Tauri, WebKitGTK, Node runtime, npm packages or native SQLite modules. It needs only what Omarchy already ships: Quickshell, Qt, bash, socat and Hyprland.
 - **Native look.** The plugin reads the active Omarchy theme's `[menu]` tokens (`qs.Commons.Color`, `Style`), so `omarchy theme set` restyles it live with no theme parser.
@@ -437,7 +440,7 @@ Store one `anchor` per item, in Unix seconds [D]. Record a visit on every launch
 - **Fallback commands:** "Use '<q>' with…" lists Google, DuckDuckGo, File Search, Search Snippets, Search Quicklinks, Translate and any command with `fallbackStatus: available`. The user orders them in Settings → Launcher.
 - **Search history:** ↑ in an empty root restores recent queries.
 - **Favorites:** ⌘⇧F (Linux: Ctrl+Shift+F) toggles; ⌘⌥↑/↓ reorders; ⌘1…9 (Linux: Ctrl+1…9) opens.
-- A URL query surfaces "Open in Browser" and "Create Quicklink". A path-like query (`~/`, `/`) surfaces file results.
+- A URL query surfaces "Open in Browser" and "Create Quicklink". A path-like query (`~/`, `/`) surfaces file results (§8.6 "Where it shows").
 
 ---
 
@@ -461,7 +464,7 @@ Full verbatim catalog: `reference/04-frontend-features.md §1 + Appendix A/B/C`.
 | **Window Management** (`window-management`) | Halves (L/R/T/B), Thirds (13), Fourths (13), Quarters (4), Sixths (6), Maximize, Almost Maximize, Maximize Width/Height, Reasonable Size (60 %, max 1024×900), Center, Center Half, Restore, Minimize, Make Larger/Smaller, Toggle Fullscreen, Move Left/Right/Top/Bottom, Move to Next/Prev Display, Move to Next/Prev Workspace, Switch to Next/Prev Workspace, Move to Workspace 1–10, Open Workspace 1–10, Resize Window (exact), Move Window (exact), Toggle Always on Top, Custom Command, Create Layout, Save Current Layout | P1 | §8.5 |
 | **Navigation** (`navigation`) | Switch Windows (list all windows; close/minimize/fullscreen actions); Search Menu Bar Items | P1 (switch), P2 (menus) | Window adapter list + focus. Menus: KDE global menu over `com.canonical.dbusmenu`, GTK `org.gtk.Menus`; partial coverage only |
 | **Emoji & Symbols** (`emoji-picker`) | Search Emoji & Symbols (grid, 8 cols, skin tone, custom keywords, pin) | P0 | Seed from **emojibase** / Unicode CLDR annotations (Raycast embeds 2,736 records incl. 822 Unicode symbols [O]). Primary action Paste (default) or Copy |
-| **File Search** (`file-search`) | Search Files (master-detail with preview), Quick Look (Ctrl+Y), Open/Reveal, Open With…, Copy Path, Move to Trash; root-search Files section; indexing status | P1 | §8.6 |
+| **File Search** (`file-search`) | Search Files (master-detail with preview), Quick Look (Ctrl+Y), Open/Reveal, Open With…, Copy Path, Move to Trash; root-search Files section; indexing status | P1 | §8.6: `ripgrep` listing plus our own ranker and progressive content search, no persistent index [D] |
 | **Raycast Notes** (`notes`) | Raycast Notes (separate floating window), Search Notes, Create Note | P1 | Separate webview window with a **ProseMirror** or **TipTap** editor, markdown shortcuts, find/replace, format bar, recently deleted (soft delete, purge after 30 d [I]). Optional SNI toggle |
 | **Raycast Focus** (`raycast-focus`) | Start/Toggle/Pause/Resume/Complete/Edit Session, Search/Create/Import Categories | P2 | Timer in backend. App blocking = watch window-open events and close/minimize matching app ids (plus HUD). Website blocking needs your own small WebExtension. Snooze default 3 min |
 | **Screenshots** (`screenshots`) | Search Screenshots (grid, OCR text search), Paste Latest Screenshot | P2 | Watch `$(xdg-user-dir PICTURES)/Screenshots` + configured dirs; OCR via tesseract (`leptess`) into FTS |
@@ -531,12 +534,67 @@ Grammar: `{keyword opt="v" opt2='v' | modifier | modifier}`. Quotes accepted: `"
 - On Hyprland, tiled windows must first be made floating (`setfloating`) before pixel moves. Make this a setting ("Float window on WM action", default on), and also expose "Restore to tiling".
 - Layouts = saved lists of `{appId, workspace, monitorIndex, rect}` applied by launching missing apps, then placing windows.
 
-### 8.6 File search [O → D]
-- Index: crawl configured scopes (default `$HOME`) with the `ignore` crate (respects `.gitignore`, `.ignore`, `.rayignore`, plus default excludes `node_modules`, `.cache`, `.git`, `CACHEDIR.TAG`). Store paths in SQLite FTS5 (trigram), or use an `fst` map like Raycast's minidex [O].
-- Watch with inotify (`notify` crate); fanotify for whole-disk watching is optional.
-- Settings [O]: scopes, ignore patterns, include hidden, use ignore files, index removable drives, content search.
-- Content search (P2): extract text via `pdftotext`, docx/odt via zip+xml, plain text, OCR images. Run extraction in a **separate process**, as Raycast does for crash isolation [O].
-- Results: name match first, then path, sorted by recency. Detail pane: preview (image, PDF first page, text head) plus metadata. Quick Look = a large preview window, or GNOME Sushi if installed.
+### 8.6 File search [D, 2026-11-04; supersedes the index design]
+
+**Raycast's design, for reference [O].** A persistent index ("minidex", an `fst` map) over configured scopes, kept fresh by file-system events, with content extraction in a separate process. Settings: scopes, ignore patterns, include hidden, use ignore files, index removable drives, content search. Results: name match first, then path, sorted by recency, with a preview detail pane and Quick Look.
+
+**Why we diverge.** The goal is the best way to find a file the user means. Three facts from measuring the dev machine (2026-11-04, warm page cache, Omarchy 4.x):
+
+| Operation | All of `$HOME` | Without three Unreal Engine copies and `node_modules` |
+|---|---|---|
+| List files (`rg --files`) | 358 ms, 925k files | 14 ms, 14.9k files |
+| Search contents for one word (`rg -l -F`) | 13.6 s | 25 to 160 ms |
+| Fuzzy filter "spec" | 922 ms, 706k hits (full path) | 22 ms, 688 hits (file names only) |
+
+1. Vendored and downloaded trees, not the index, decide the cost. Excluding them removes 98% of the work.
+2. Without them, `ripgrep` is fast enough that a persistent index buys almost nothing at this scale.
+3. Fuzzy matching across the full path matches nearly everything. The file name has to carry the match.
+
+`ripgrep`, `fd` and `zoxide` are in Omarchy's base packages (`$OMARCHY_PATH/install/omarchy-base.packages`), so v1 adds no runtime dependency. A persistent index stays a later upgrade, taken only when a measured trigger below fires.
+
+**Listing [D].**
+- `rg --files` over the configured roots (default `$HOME`). It honours `.gitignore`, `.ignore` and `.rgignore`, skips hidden files, and reads omacast's own ignore file `~/.config/omacast/file-search.ignore` through `--ignore-file`. The default ignore file lists `node_modules/`, `.cache/`, `target/`, `.git/` and the private paths below.
+- The path list lives in memory in the flea-search helper, or in the JS fallback when the helper is not built. Refresh it in the background when the launcher opens and the list is older than 30 s [I], and keep the previous list until the new one arrives. Nothing is written to disk.
+- **Large untouched subtrees** [D]. A directory holding more than 5,000 files [I] with no usage signal anywhere inside it is a large subtree. Its paths are refreshed at most once a day [I] in a separate `rg` pass, they are left out of content search, and their files match only on an exact or prefix file name. The first time one is detected, a toast offers to add it to the ignore file. Never exclude one silently.
+- **Private paths, excluded by default** [D]: `~/.ssh`, `~/.gnupg`, `~/.password-store`, `~/.local/share/keyrings`, browser profiles (`~/.mozilla`, `~/.config/chromium`, `~/.config/google-chrome`, `~/.config/BraveSoftware`), and the contents of `.env*` files.
+
+**Usage signals [D].** The ranking depends on these, so each one names its source:
+
+| Signal | Source | Notes |
+|---|---|---|
+| Opened from omacast | `core/Frecency.js` keyed by absolute path, in `db/frecency.json` | Same formula as root search (+100 per open, 10-day half-life). |
+| Opened in Neovim | `~/.local/state/nvim/shada/main.shada` file marks and jump list | It's msgpack; read with a small parser in the helper [I]. The strongest signal on Omarchy. |
+| Directory frecency | `zoxide query --list --score` | Seeds folder scores. No user text in argv. |
+| Last changed | the file's mtime | A recency signal, not the final tiebreak. |
+| Active project | a git repo root whose `HEAD` reflog changed in the last 14 days [I] | Projects become folder nodes with their own weight. |
+
+Not used: access times (useless under `relatime`), the GTK recent-files list (absent on Omarchy), inotify open events (flooded by git, rg and the listing itself) and fanotify (needs root).
+
+**Folder-tree prior [D].** The directory tree is the graph. A folder's weight is the decayed sum of its descendants' usage plus its zoxide score. A file inherits its nearest weighted ancestor's weight, decayed by depth [I]. So `~/Projects/oma-cast/README.md` outranks `~/Downloads/Linux_Unreal_Engine/README.md`. Co-access edges (files opened together) are a later addition, once omacast and Neovim opens give enough events.
+
+**Ranking hierarchy [D].** Files get their own ranker, inside the Files section and the Search Files command. Root items keep the ported Raycast ranker (§0 rule 5).
+1. **Match band on the file name**: exact (with or without the extension), then prefix, then word start, then subsequence, then typo (Flea's tiers, as for apps).
+2. **Path-only band.** Every query word matches a path segment and the last word matches the file name: `oma spec` finds `oma-cast/SPEC.md`.
+3. **Within a band**, sort by a blended score: personal frecency, then recency, then the folder-tree prior. Weights are tuned against a recorded query set [I].
+4. **Bounded lift.** Usage can move a file up at most one band. Nothing beats an exact file-name match.
+5. **Content matches** sit in their own section, always below name matches.
+
+An empty query in Search Files shows "Recent & frequent files", ranked by usage alone.
+
+**Content search, revealed progressively [D].**
+- It appears when the query has at least 3 characters and has been still for 150 ms [I], and either name matches number fewer than 5 [I] or the query contains a space.
+- It runs `rg --json -F -i -f -` with the query on stdin (§0 rule 6), over candidate files in folder-tree order. Files over 1 MB and binaries are skipped. The time budget is 300 ms [I], and results stream in as they arrive, capped at 20 rows [I].
+- Each row shows the path and the matching line. A keystroke, hide or view change kills the running `rg` and drops its late rows. The serial/revision guard that already protects async root search does this (`ui/LauncherWindow.qml`, `services/NativeSearch.qml`); a row from an older query is never activated.
+- Nothing about contents is cached on disk.
+
+**Where it shows [D].**
+- **Search Files** command: master-detail list, preview pane (image, text head, PDF first page via `pdftotext` when present), Open, Show in Folder (`xdg-open` on the parent), Open With…, Copy Path, Move to Trash (freedesktop Trash spec), Quick Look on Ctrl+Y as a larger preview.
+- **Root search**: a Files section after Results and before the fallbacks, with at most 3 rows [I], shown for path-like queries (`~/`, `/`) and for queries of at least 3 characters that have file-name matches.
+
+**Upgrade triggers for a persistent index [D].** Take the index route (an in-memory tree saved to `~/.cache/omacast` as 0600, inotify on hot subtrees, folder-mtime rechecks elsewhere) only when one of these is measured:
+- the first search after a reboot takes longer than 1 s
+- the listing outside large subtrees exceeds 100k files
+- a background refresh takes longer than 200 ms
 
 ---
 
@@ -837,9 +895,17 @@ Repo layout [D]:
 - `WindowManagement` API for extensions.
 - **Accept:** every WM command is correct on a dual-monitor Hyprland setup with reserved waybar space, tested with a golden geometry table. Switch Windows focuses across workspaces.
 
-### Phase 7: File search
-- Indexer (Rust, separate thread; content extraction in a subprocess), search UI with preview, root-search Files section, Quick Look, settings.
-- **Accept:** a 500k-file home dir indexes in under 2 min. Queries return in under 50 ms. Renames and moves are reflected within 2 s.
+### Phase 7: File search (§8.6) [D, 2026-11-04]
+- Settle these with throwaway prototypes before building: the band lift and blend weights (against a recorded query set from the developer's own use), the content-reveal gate, the large-subtree threshold, and the first-search time after a reboot.
+- Build, in order: listing and large-subtree detection, the file ranker with usage signals and the folder-tree prior, the Search Files command with preview and actions, the root Files section, progressive content results.
+- Prove each step with the `verify-omacast` skill (`.agents/skills/verify-omacast/`), and check the search ordering with `verify-search-ordering` whenever the async path changes.
+- **Accept** (on the dev machine: 925k files in `$HOME`, three Unreal Engine trees):
+  - The Unreal and `node_modules` trees are detected as large subtrees without configuration, and a toast offers to ignore them.
+  - A warm background refresh outside large subtrees takes under 50 ms. File-name results update within 50 ms of a keystroke.
+  - `oma spec` puts `~/Projects/oma-cast/SPEC.md` first. A file opened twice from omacast outranks an untouched file in the same band, and never outranks an exact file-name match.
+  - A rare word with fewer than 5 name matches shows content rows within 300 ms warm. The next keystroke cancels them, and ↵ never opens a row from the older query.
+  - No process argv ever holds query text (`tests/privacy.test.js` plus a live `ps` check during a content search).
+  - The first-search time after a reboot is measured and recorded here, deciding whether the index upgrade is needed.
 
 ### Phase 8: Parity features
 - Emoji & Symbols, Notes window, Theme Studio, Switch Theme, Confetti, Focus, Screenshots, Calendar, Contacts, Dictionary, Translator (provider), Dictation (whisper.cpp), Typing Practice, `.rayconfig` import/export (§11), Kill Process and Color Picker as first-party extras.
@@ -856,6 +922,7 @@ Repo layout [D]:
 - **Extension compatibility ceiling.** Many store extensions are macOS-bound (AppleScript, `~/Library` paths, Mac apps). Expect roughly a minority to need changes. Measure it with the compatibility script, and prefer extensions that list `Windows` in `platforms`.
 - **`@raycast/api` behaviour drift.** Raycast evolves the API, so pin a version (2.8.2 shipped API whose template depends on `@raycast/api ^2.6.3`, `@raycast/utils ^2.2.7` [O]). Track the public changelog.
 - **Snippet expansion needs input-device access.** This is a security trade-off; keep it opt-in, and do the IBus/Fcitx5 engine as the cleaner long-term path.
+- **File search after a reboot.** Every §8.6 timing was measured with a warm page cache. The first search after boot reads every candidate file from disk and may take seconds; measure it before Phase 7 ships (§8.6 upgrade triggers).
 - **Unrecovered numbers** [I]: backend timeouts and restart limits, HUD duration, the Suggestions section size, and window y-offset. Pick sensible values (given above) and tune them.
 - **Frecency epoch:** Raycast's anchor epoch wasn't confirmed. It doesn't matter for a clone that uses Unix seconds consistently, but convert carefully when importing `frecency` from `.rayconfig` (check whether values look like 2001-epoch seconds, i.e. ≈ 8×10⁸ vs Unix ≈ 1.7×10⁹).
 - **Calculator parity.** Soulver-style natural language ("$30 + 20%", "3 days from now", time zones) exceeds `fend`. Consider libqalculate as an alternate engine behind the same interface. **[D] 2026-10-19:** the Quickshell build uses neither. `core/Calculator.js` is a self-contained JS evaluator that covers these cases (see CLAUDE.md Status). libqalculate isn't an Omarchy dependency, and `qalc` reads "15% of 80" and "3 days from now" differently from Soulver.
