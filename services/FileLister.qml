@@ -44,7 +44,9 @@ Item {
 
   signal message(string level, string text, var metadata)
 
-  readonly property string writeScript: 'umask 077; case $1 in create) [[ -e $2 ]] && exec cat >/dev/null; exec cat >"$2" ;; append) exec cat >>"$2" ;; replace) cat >"$2.tmp" && exec mv -f -- "$2.tmp" "$2" ;; esac; exit 2'
+  // create fills a temp file and moves it in only while the target is
+  // missing, so a write killed halfway never leaves an empty file behind.
+  readonly property string writeScript: 'umask 077; case $1 in create) [[ -e $2 ]] && exec cat >/dev/null; cat >"$2.tmp" || exit 1; mv -n -- "$2.tmp" "$2"; rm -f -- "$2.tmp"; [[ -e $2 ]]; exit ;; append) exec cat >>"$2" ;; replace) cat >"$2.tmp" && exec mv -f -- "$2.tmp" "$2" ;; esac; exit 2'
   // rg lists every file, private paths included, when an --ignore-file is
   // missing or unreadable, and still exits 0. Exit 3 means "restore them first".
   readonly property string listScript: '[[ -f $2 && -r $2 && -f $3 && -r $3 ]] || exit 3; exec rg --files "${@:4}" --ignore-file "$2" --ignore-file "$3" "$1"'
