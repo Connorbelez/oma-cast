@@ -103,6 +103,18 @@ function parseCounts(text) {
   return counts
 }
 
+// Under pipefail the recount exits with rg's 2 for one unreadable folder
+// while awk still counts the rest, so a total over zero is a usable count.
+function recountOutcome(run, root) {
+  if (run.exitStatus === 0 && run.exitCode === 124) return { warnings: ["files: recount timed out"] }
+  var counts = parseCounts(run.text)
+  if (run.exitStatus === 0 && run.exitCode === 0) return { counts: counts }
+  if (run.exitStatus === 0 && run.exitCode === 2 && counts[root] > 0) {
+    return { counts: counts, warnings: ["files: recount exited 2 for " + root + "; counted what it could read"] }
+  }
+  return { warnings: ["files: recount exited " + (run.exitStatus !== 0 ? "abnormally" : run.exitCode) + " for " + root + "; keeping the previous large subtrees"] }
+}
+
 // The topmost directories over the threshold with no signal inside, walking
 // down from the root as docs/phase7-prototypes/detect.py does. The root itself
 // is never flagged, or a home with no signals yet would drop every file.
@@ -258,7 +270,7 @@ if (typeof module !== "undefined") {
     DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, REFRESH_AFTER_MS: REFRESH_AFTER_MS,
     DEFAULT_IGNORES: DEFAULT_IGNORES, PRIVATE_PATHS: PRIVATE_PATHS, defaultIgnoreText: defaultIgnoreText,
     RECOUNT_SCRIPT: RECOUNT_SCRIPT, COUNT_PROGRAM: COUNT_PROGRAM,
-    parseList: parseList, listOutcome: listOutcome, parseSignals: parseSignals, parseCounts: parseCounts, largeSubtrees: largeSubtrees, ignores: ignores, badIgnoreLines: badIgnoreLines,
+    parseList: parseList, listOutcome: listOutcome, parseSignals: parseSignals, parseCounts: parseCounts, recountOutcome: recountOutcome, largeSubtrees: largeSubtrees, ignores: ignores, badIgnoreLines: badIgnoreLines,
     ignoreLine: ignoreLine, ignoreFileText: ignoreFileText, displayPath: displayPath, groupDigits: groupDigits,
     treeToAsk: treeToAsk, toastFor: toastFor
   }

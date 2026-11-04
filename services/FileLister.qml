@@ -234,13 +234,14 @@ Item {
 
   function counted() {
     if (!lister.recounting || !recountRun.exited || !recountRun.streamed || lister.signalsAt < lister.recountStartedAt) return
-    if (recountRun.exitStatus !== 0 || recountRun.code !== 0) {
+    var outcome = FileIndex.recountOutcome({ exitCode: recountRun.code, exitStatus: recountRun.exitStatus, text: recountOut.text }, lister.home)
+    if (outcome.warnings) outcome.warnings.forEach(function(text) { lister.message("warning", text, null) })
+    if (!outcome.counts) {
       recountWatchdog.stop()
       lister.recounting = false
-      lister.message("warning", "files: recount exited " + (recountRun.exitStatus ? "abnormally" : recountRun.code) + " for " + lister.home + "; keeping the previous large subtrees", null)
       return
     }
-    var counts = FileIndex.parseCounts(recountOut.text)
+    var counts = outcome.counts
     var found = FileIndex.largeSubtrees(counts, lister.signals, FileIndex.DEFAULT_THRESHOLD, lister.home)
     var changed = JSON.stringify(found) !== JSON.stringify(lister.subtrees)
     lister.subtrees = found

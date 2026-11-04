@@ -49,8 +49,23 @@ test("the recount prints the root's file count and each directory over the thres
   ])
 })
 
-test("the recount fails when rg fails", (t) => {
-  assert.equal(recount(t, fixture(), 5, 2).status, 2)
+test("recountOutcome counts what rg read when it exits 2 for an unreadable folder, and keeps the old trees otherwise", (t) => {
+  const run = (r) => ({ exitCode: r.status, exitStatus: 0, text: r.stdout })
+  assert.deepEqual(FileIndex.recountOutcome(run(recount(t, fixture(), 5, 2)), HOME), {
+    counts: { [HOME]: 40, [`${HOME}/Applications`]: 6, [`${HOME}/Applications/Engine`]: 6, [`${HOME}/Applications/Engine/lib`]: 6, [`${HOME}/Dev`]: 6, [`${HOME}/Dev/app`]: 6 },
+    warnings: [`files: recount exited 2 for ${HOME}; counted what it could read`]
+  })
+  assert.deepEqual(FileIndex.recountOutcome(run(recount(t, [], 5, 2)), HOME), {
+    warnings: [`files: recount exited 2 for ${HOME}; keeping the previous large subtrees`]
+  })
+  assert.deepEqual(FileIndex.recountOutcome(run(recount(t, fixture(), 5, 1)), HOME), {
+    warnings: [`files: recount exited 1 for ${HOME}; keeping the previous large subtrees`]
+  })
+  assert.deepEqual(FileIndex.recountOutcome({ exitCode: 0, exitStatus: 1, text: `40\t${HOME}\n` }, HOME), {
+    warnings: [`files: recount exited abnormally for ${HOME}; keeping the previous large subtrees`]
+  })
+  assert.deepEqual(FileIndex.recountOutcome({ exitCode: 124, exitStatus: 0, text: "" }, HOME), { warnings: ["files: recount timed out"] })
+  assert.deepEqual(FileIndex.recountOutcome(run(recount(t, ["/home/u/a"], 5)), HOME), { counts: { [HOME]: 1 } })
 })
 
 test("parseCounts reads the recount's lines into a count per directory", () => {
