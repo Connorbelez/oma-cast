@@ -266,6 +266,15 @@ test("the usage-signal script passes only fixed flags and the home dir to zoxide
   assert.equal(r.stdout, "  2.0 /home/u/Dev\n/home/u/Work/repo/.git/logs/HEAD\n")
   assert.deepEqual(fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => l.trim().replace(/^\/bin\/bash \S+\/(\w+)/, "$1")), [
     "zoxide query --list --score",
-    "fd -H -t f -p /\\.git/logs/HEAD$ --changed-within 14d --max-depth 8 --exclude node_modules . /home/u"
+    "fd -H -t f -p /\\.git/logs/HEAD$ --changed-within 14d --max-depth 8 --exclude node_modules /home/u"
   ])
+})
+
+// rg anchors --ignore-file patterns at its working directory, and a path
+// fd prints relative to some other directory never matches a tree.
+test("every process that walks the home dir starts in it", () => {
+  const blocks = fileListerSource().split("\n  Process {").slice(1).map((b) => b.split("\n  }")[0])
+  const walkers = blocks.filter((b) => /command:.*(listScript|signalsScript|RECOUNT_SCRIPT)/.test(b))
+  assert.equal(walkers.length, 4)
+  for (const b of walkers) assert.match(b, /\n    workingDirectory: lister\.home\n/, b.split("\n")[1])
 })
