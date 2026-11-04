@@ -126,9 +126,8 @@ Item {
       return
     }
     lister.ignoreRetried = false
-    if (outcome.warnings) {
-      outcome.warnings.forEach(function(text) { lister.message("warning", text, null) })
-    } else {
+    if (outcome.warnings) outcome.warnings.forEach(function(text) { lister.message("warning", text, null) })
+    if (outcome.rows) {
       lister.rows = outcome.rows
       lister.roots = runs.map(function(run) { return run.root })
       lister.listedAt = Date.now()

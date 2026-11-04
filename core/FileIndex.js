@@ -42,13 +42,21 @@ function parseList(text) {
 // cut short.
 function listOutcome(runs) {
   if (runs.some(function(r) { return r.exitStatus === 0 && r.exitCode === 3 })) return { missing: true }
-  var failed = runs.filter(function(r) { return r.exitStatus !== 0 || r.exitCode !== 0 })
-  if (failed.length) {
-    return { warnings: failed.map(function(r) {
-      return "files: rg exited " + (r.exitStatus !== 0 ? "abnormally" : r.exitCode) + " for " + r.root + "; keeping the previous list"
-    }) }
-  }
-  return { rows: parseList(runs.map(function(r) { return r.text }).join("")) }
+  var warnings = []
+  var failed = false
+  runs.forEach(function(r) {
+    if (r.exitStatus === 0 && r.exitCode === 0) return
+    if (r.exitStatus === 0 && r.exitCode === 2 && r.text) {
+      warnings.push("files: rg exited 2 for " + r.root + "; listed what it could read")
+      return
+    }
+    failed = true
+    warnings.push("files: rg exited " + (r.exitStatus !== 0 ? "abnormally" : r.exitCode) + " for " + r.root + "; keeping the previous list")
+  })
+  if (failed) return { warnings: warnings }
+  var out = { rows: parseList(runs.map(function(r) { return r.text }).join("")) }
+  if (warnings.length) out.warnings = warnings
+  return out
 }
 
 // zoxide prints "score path"; the git probe prints "<repo>/.git/logs/HEAD".
