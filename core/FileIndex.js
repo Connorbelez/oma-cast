@@ -6,6 +6,7 @@ var DEFAULT_THRESHOLD = 5000
 var ASK_AGAIN_MS = 7 * 86400000
 var RECOUNT_MS = 86400000
 var REFRESH_AFTER_MS = 30000
+var OPEN_REFRESH_AFTER_MS = 600000
 
 var DEFAULT_IGNORES = [
   "node_modules/", ".cache/", "target/", ".git/", "Cache/", "Code Cache/", "Service Worker/", "compile-cache/"
@@ -269,7 +270,7 @@ function toastFor(tree, home, ignoreMethod) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, REFRESH_AFTER_MS: REFRESH_AFTER_MS,
+    DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, REFRESH_AFTER_MS: REFRESH_AFTER_MS, OPEN_REFRESH_AFTER_MS: OPEN_REFRESH_AFTER_MS,
     DEFAULT_IGNORES: DEFAULT_IGNORES, PRIVATE_PATHS: PRIVATE_PATHS, defaultIgnoreText: defaultIgnoreText,
     RECOUNT_SCRIPT: RECOUNT_SCRIPT, COUNT_PROGRAM: COUNT_PROGRAM,
     parseList: parseList, listOutcome: listOutcome, parseSignals: parseSignals, parseCounts: parseCounts, recountOutcome: recountOutcome, largeSubtrees: largeSubtrees, ignores: ignores, badIgnoreLines: badIgnoreLines,

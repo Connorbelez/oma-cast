@@ -30,6 +30,7 @@ Item {
   property int recountFiles: 0
   property bool recounting: false
   property bool recountDue: false
+  property bool recountAfterRefresh: false
   property double recountStartedAt: 0
 
   property var signals: []
@@ -62,32 +63,40 @@ Item {
     if (lister.started || !lister.ignoreFileReady || !lister.stateLoaded) return
     lister.save("replace", lister.untouchedFile, FileIndex.ignoreFileText(lister.subtrees, lister.home), function() {
       lister.started = true
-      if (lister.recountedAt) lister.refresh(lister.defaultRoots)
-      if (Date.now() - lister.recountedAt >= FileIndex.RECOUNT_MS) lister.recount()
+      lister.catchUp(0)
     })
   }
   onIgnoreFileReadyChanged: lister.begin()
   onStateLoadedChanged: lister.begin()
 
-  // The previous list answers until the refresh lands, so it starts after
-  // the launcher's first frames instead of queueing behind them. A refresh in
-  // flight already brings the list up to date.
-  function opened() {
-    if (lister.started && lister.stale()) openRefresh.restart()
+  // The list refreshes when the launcher hides, where nothing competes with
+  // typing or painting. The previous list answers until a refresh lands.
+  function hidden() {
+    if (lister.started) lister.catchUp(FileIndex.REFRESH_AFTER_MS)
   }
 
-  function stale() {
-    return !lister.refreshing && (lister.dirty || Date.now() - lister.listedAt > FileIndex.REFRESH_AFTER_MS)
+  // A due recount waits for the refresh, so the list never queues behind it.
+  function catchUp(maxAgeMs) {
+    if (lister.stale(maxAgeMs)) lister.refresh(lister.defaultRoots)
+    if (!lister.recountDue && Date.now() - lister.recountedAt < FileIndex.RECOUNT_MS) return
+    if (lister.refreshing) lister.recountAfterRefresh = true
+    else lister.recount()
+  }
+
+  // An open refreshes only a list kept through a long session, and after
+  // the launcher's first frames instead of queueing behind them.
+  function opened() {
+    if (lister.started && lister.stale(FileIndex.OPEN_REFRESH_AFTER_MS)) openRefresh.restart()
+  }
+
+  function stale(maxAgeMs) {
+    return !lister.refreshing && (lister.dirty || Date.now() - lister.listedAt > maxAgeMs)
   }
 
   Timer {
     id: openRefresh
     interval: 250
-    onTriggered: if (lister.stale()) lister.refresh(lister.defaultRoots)
-  }
-
-  function hidden() {
-    if (lister.started && (lister.recountDue || Date.now() - lister.recountedAt >= FileIndex.RECOUNT_MS)) lister.recount()
+    onTriggered: if (lister.stale(FileIndex.OPEN_REFRESH_AFTER_MS)) lister.refresh(lister.defaultRoots)
   }
 
   // ------------------------------------------------------------- the list
@@ -136,6 +145,10 @@ Item {
       lister.message("info", "files: listed " + outcome.rows.length + " paths in " + lister.listMs + " ms", null)
     }
     if (lister.dirty) lister.refresh(lister.defaultRoots)
+    else if (lister.recountAfterRefresh) {
+      lister.recountAfterRefresh = false
+      lister.recount()
+    }
   }
 
   // Recreates a missing ignore file from the defaults and the untouched file
