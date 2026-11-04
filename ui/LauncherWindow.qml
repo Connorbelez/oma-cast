@@ -651,7 +651,9 @@ PanelWindow {
     target: window.backend
     function onCandidatesRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert) window.rebuild(false) }
     // Exchange rates or zone offsets arrived: re-evaluate a calculation on screen.
-    function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && window.query) window.rebuild(false) }
+    // Not under an alert: onCandidatesRevisionChanged skips that rebuild, so a
+    // search started here could be cancelled with nothing left to settle it.
+    function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert && window.query) window.rebuild(false) }
   }
 
 

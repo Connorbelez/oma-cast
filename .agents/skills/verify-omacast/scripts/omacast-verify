@@ -1,0 +1,272 @@
+#!/bin/bash
+# Verification harness for omacast, the launcher plugin inside omarchy-shell.
+# Usage: omacast-verify <command> [args]. Run with no arguments for help.
+#
+# There is one omarchy-shell per session and the plugin uses the real XDG dirs,
+# so runs are not isolated. This script records what existed before `launch`
+# and `cleanup` undoes only what the run added. Evidence goes under
+# ${XDG_STATE_HOME:-~/.local/state}/omacast-verify/<run-id>/ (0700) and survives cleanup.
+set -uo pipefail
+umask 077 # transcripts and screenshots are private
+
+here=$(cd "$(dirname "$0")" && pwd)
+repo=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null) || { echo "omacast-verify: not inside the omacast checkout" >&2; exit 1; }
+cli="$repo/bin/omacast"
+plugin_id=typecraft.omacast
+plugins_dir="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/plugins"
+root="${XDG_STATE_HOME:-$HOME/.local/state}/omacast-verify"
+data_dirs=("${XDG_CONFIG_HOME:-$HOME/.config}/omacast" "${XDG_DATA_HOME:-$HOME/.local/share}/omacast"
+  "${XDG_CACHE_HOME:-$HOME/.cache}/omacast" "${XDG_STATE_HOME:-$HOME/.local/state}/omacast")
+
+die() { echo "omacast-verify: $*" >&2; exit 1; }
+note() { echo "omacast-verify: $*" >&2; }
+
+run_dir() {
+  [[ -f $root/current ]] || die "no active run; start one with: omacast-verify launch"
+  local id; id=$(<"$root/current")
+  [[ -d $root/$id ]] || die "run $id is missing from $root"
+  printf '%s\n' "$root/$id"
+}
+
+# Append a line to this run's transcript.
+record() { local dir; dir=$(run_dir) && printf '%s %s\n' "$(date +%H:%M:%S.%3N)" "$*" >>"$dir/transcript.log"; }
+
+plugin_links() {
+  local link
+  for link in "$plugins_dir/$plugin_id" "$plugins_dir/$plugin_id".dev-*; do
+    [[ -L $link ]] && printf '%s\n' "$link"
+  done
+}
+
+linked_here() {
+  local link
+  while IFS= read -r link; do
+    [[ $(readlink -f "$link") == "$repo" ]] && return 0
+  done < <(plugin_links)
+  return 1
+}
+
+managed_install() { [[ -d $plugins_dir/$plugin_id && ! -L $plugins_dir/$plugin_id ]]; }
+
+answers() { [[ $(omarchy-shell omacast ping 2>/dev/null) == ok ]]; }
+
+layer_mapped() {
+  hyprctl layers -j 2>/dev/null | jq -e '[.. | objects | select(.namespace? == "omacast")] | length > 0' >/dev/null
+}
+
+is_open() { [[ $(omarchy-shell omacast isOpen 2>/dev/null) == true ]]; }
+
+wait_until() { # wait_until <tenths> <command...>
+  local n=$1; shift
+  for ((i = 0; i < n; i++)); do "$@" && return 0; sleep 0.1; done
+  return 1
+}
+
+cmd_launch() {
+  command -v omarchy-shell >/dev/null || die "omarchy-shell not found; this harness needs a live Omarchy session"
+  omarchy-shell shell ping >/dev/null 2>&1 || die "omarchy-shell is not running"
+  if [[ -f $root/current && -d $root/$(<"$root/current") ]]; then
+    die "run $(<"$root/current") is still active; finish it with: omacast-verify cleanup"
+  fi
+  local id dir; id=$(date +%Y%m%d-%H%M%S)-$$
+  dir="$root/$id"
+  mkdir -p "$dir" && chmod 700 "$root" "$dir"
+  printf '%s\n' "$id" >"$root/current"
+
+  local installed_before=0 managed_before=0 d
+  linked_here && installed_before=1
+  managed_install && managed_before=1
+  {
+    echo "repo=$repo"
+    echo "head=$(git -C "$repo" rev-parse --short HEAD)$([[ -n $(git -C "$repo" status --porcelain) ]] && echo +dirty)"
+    echo "installed_before=$installed_before"
+    echo "managed_before=$managed_before"
+    for d in "${data_dirs[@]}"; do [[ -e $d ]] && echo "existed=$d"; done
+  } >"$dir/run.env"
+
+  if (( managed_before )); then
+    die "omacast is installed from the marketplace in $plugins_dir/$plugin_id; this harness drives a development checkout. Remove it with 'omarchy plugin remove $plugin_id' first, or verify that install by hand"
+  fi
+  if (( installed_before )); then
+    note "plugin already linked to this checkout; reloading so the shell runs the current files"
+    "$cli" reload || die "reload failed"
+    sleep 1
+  else
+    note "installing this checkout as a development plugin (cleanup uninstalls it)"
+    "$cli" install </dev/null || die "install failed"
+  fi
+  wait_until 100 answers || die "plugin did not answer IPC; read the log: omacast-verify log"
+  wait_until 50 bash -c '[[ $(omarchy-shell omacast call system.info "{}" 2>/dev/null) == *"\"candidates\""* ]]' ||
+    die "backend did not report system.info"
+  record "launch run=$id installed_before=$installed_before"
+  echo "run $id ready; evidence in $dir"
+}
+
+cmd_doctor() {
+  local bad=0 dir
+  dir=$(run_dir) || exit 1
+  ok() { printf '  ok    %s\n' "$1"; }
+  no() { printf '  FAIL  %s\n' "$1"; bad=1; }
+  echo "omacast-verify doctor ($(basename "$dir"))"
+  answers && ok "plugin answers IPC" || no "plugin answers IPC"
+  linked_here && ok "plugin link points at $repo" || no "plugin link points at $repo"
+  [[ $(plugin_links | wc -l) -eq 1 ]] && ok "exactly one plugin link" || no "expected one plugin link, found: $(plugin_links | tr '\n' ' ')"
+  local info; info=$(omarchy-shell omacast call system.info "{}" 2>/dev/null)
+  local n; n=$(jq -r '.data.candidates // 0' <<<"$info" 2>/dev/null)
+  (( n > 300 )) && ok "$n root candidates (apps + Omarchy menu)" || no "only ${n:-0} root candidates"
+  [[ $(omarchy-shell omacast call system.healthPing '{}' 2>/dev/null) == '{"ok":true,"data":null}' ]] &&
+    ok "backend health ping" || no "backend health ping"
+  local errors; errors=$(qs log -n -p "${OMARCHY_PATH:-/usr/share/omarchy}/shell" -t 400 2>/dev/null |
+    grep -E 'typecraft\.omacast|\[omacast\]' | grep -ciE 'unavailable|error|is not a type|illegal')
+  (( errors == 0 )) && ok "no omacast QML errors in the last 400 shell log lines" ||
+    no "$errors omacast error lines in the shell log; run: omacast-verify log"
+  [[ -x $repo/bin/omacast-search ]] && ok "flea-search helper built" || printf '  info  no flea-search helper; the JS matcher answers (bin/build-search needs cargo)\n'
+  is_open && printf '  info  launcher is open\n' || printf '  info  launcher is hidden\n'
+  printf '  info  checkout %s\n' "$(grep '^head=' "$dir/run.env" | cut -d= -f2)"
+  return $bad
+}
+
+cmd_open() {
+  run_dir >/dev/null || exit 1
+  # summon with a payload sets the query, so the run never types onto a stale one.
+  omarchy-shell shell summon "$plugin_id" '{"query":""}' >/dev/null || die "summon failed"
+  wait_until 30 layer_mapped || die "omacast layer did not map"
+  wait_until 30 is_open || die "plugin did not report open"
+  sleep 0.15 # keys sent within ~40 ms of mapping reach the window underneath (CLAUDE.md)
+  # A pushed view survives hide/show until popToRootTimeout (90 s), so the query
+  # alone is not a clean start. Shift+Esc closes a popup or pops to root; twice
+  # covers both, and neither closes the launcher.
+  hypruse keyboard key shift+escape >/dev/null && hypruse keyboard key shift+escape >/dev/null || die "could not reset to root"
+  sleep 0.2
+  record "open"
+  echo "open"
+}
+
+cmd_hide() {
+  run_dir >/dev/null || exit 1
+  omarchy-shell omacast hide >/dev/null
+  wait_until 30 bash -c '! hyprctl layers -j | jq -e "[.. | objects | select(.namespace? == \"omacast\")] | length > 0" >/dev/null' ||
+    die "omacast layer is still mapped"
+  record "hide"
+  echo "hidden"
+}
+
+require_focus() {
+  is_open && layer_mapped || die "the launcher is not open; refusing to send keys to whatever window is underneath (run: omacast-verify open)"
+}
+
+cmd_type() {
+  [[ -n ${1:-} ]] || die "usage: omacast-verify type <text>"
+  run_dir >/dev/null || exit 1
+  require_focus
+  hypruse keyboard type "$1" >/dev/null || die "hypruse could not type"
+  sleep 0.2
+  record "type $1"
+  echo "typed ${#1} characters"
+}
+
+cmd_key() {
+  [[ -n ${1:-} ]] || die "usage: omacast-verify key <combo>   e.g. ctrl+k, shift+escape, down, enter"
+  run_dir >/dev/null || exit 1
+  require_focus
+  hypruse keyboard key "$1" >/dev/null || die "hypruse could not press $1"
+  sleep 0.2
+  record "key $1"
+  echo "pressed $1"
+}
+
+cmd_shot() {
+  [[ -n ${1:-} ]] || die "usage: omacast-verify shot <slug>"
+  local dir out; dir=$(run_dir) || exit 1
+  out="$dir/$1.png"
+  local monitor; monitor=$(hyprctl monitors -j | jq -r '.[] | select(.focused) | .name')
+  grim -o "$monitor" "$out" || die "grim failed"
+  chmod 600 "$out"
+  record "shot $1.png"
+  echo "$out"
+}
+
+cmd_call() {
+  [[ -n ${1:-} ]] || die "usage: omacast-verify call <method> [json]"
+  local dir out; dir=$(run_dir) || exit 1
+  out=$(omarchy-shell omacast call "$1" "${2:-"{}"}")
+  record "call $1 ${2:-} -> $out"
+  printf '%s\n' "$out"
+}
+
+cmd_run() { # run <commandId>: what `omacast run` does (skips confirmation alerts)
+  [[ -n ${1:-} ]] || die "usage: omacast-verify run <commandId>   e.g. builtin:calculator-history"
+  local out; run_dir >/dev/null || exit 1
+  out=$(omarchy-shell omacast run "$1")
+  if [[ $(omarchy-shell omacast isOpen) == true ]]; then
+    wait_until 30 layer_mapped || die "omacast layer did not map"
+    sleep 0.15
+  fi
+  record "run $1 -> $out"
+  printf '%s\n' "$out"
+}
+
+cmd_titles() { # titles <query>: section/row titles as root search returns them
+  local dir out; dir=$(run_dir) || exit 1
+  out=$(jq -cn --arg q "${1:-}" '{query:$q}')
+  out=$(omarchy-shell omacast call rootSearch.search "$out")
+  record "titles ${1:-} -> $(jq -c '[.data[]? | {s:.title, r:[.rows[]?.title][:5]}]' <<<"$out")"
+  jq -r '.data[]? | "## \(.title // .id)", (.rows[]?.title | "  \(.)")' <<<"$out"
+}
+
+cmd_log() {
+  qs log -n -p "${OMARCHY_PATH:-/usr/share/omarchy}/shell" -t "${1:-80}" 2>/dev/null | grep -E 'omacast' || true
+}
+
+cmd_cleanup() {
+  local dir; dir=$(run_dir) || exit 1
+  is_open && omarchy-shell omacast hide >/dev/null
+  if grep -q '^installed_before=0' "$dir/run.env"; then
+    "$cli" uninstall </dev/null || note "uninstall reported an error; check: omarchy plugin list"
+    local d
+    for d in "${data_dirs[@]}"; do
+      grep -qxF "existed=$d" "$dir/run.env" && continue
+      [[ -e $d ]] || continue
+      case $d in */omacast) rm -rf -- "$d" && note "removed $d (created by this run)" ;; esac
+    done
+  else
+    note "the plugin was linked before this run; leaving it installed"
+  fi
+  record "cleanup"
+  rm -f "$root/current"
+  echo "cleaned up; evidence kept in $dir"
+  ls -1 "$dir"
+}
+
+usage() {
+  cat <<USAGE
+omacast-verify <command>
+  launch            record prior state, install or reload this checkout, wait until ready
+  doctor            read-only: IPC, link, candidates, QML errors, helper, checkout
+  open | hide       show the launcher with an empty query | hide it
+  type <text>       type into the open launcher (refuses when it is hidden)
+  key <combo>       press a key in the open launcher: enter, down, ctrl+k, shift+escape
+  shot <slug>       screenshot the focused monitor to <run>/<slug>.png
+  call <m> [json]   backend RPC, logged to <run>/transcript.log
+  run <commandId>   open a command as \`omacast run\` does (no confirmation alert!)
+  titles <query>    root-search sections and row titles for a query
+  log [lines]       omacast lines from the shell log
+  cleanup           hide, undo what launch added, keep the evidence
+USAGE
+}
+
+case "${1:-}" in
+  launch) cmd_launch ;;
+  doctor) cmd_doctor ;;
+  open) cmd_open ;;
+  hide) cmd_hide ;;
+  type) cmd_type "${2:-}" ;;
+  key) cmd_key "${2:-}" ;;
+  shot) cmd_shot "${2:-}" ;;
+  call) cmd_call "${2:-}" "${3:-}" ;;
+  run) cmd_run "${2:-}" ;;
+  titles) cmd_titles "${2:-}" ;;
+  log) cmd_log "${2:-}" ;;
+  cleanup) cmd_cleanup ;;
+  *) usage; [[ -z ${1:-} ]] ;;
+esac
