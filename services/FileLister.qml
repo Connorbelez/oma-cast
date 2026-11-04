@@ -41,6 +41,7 @@ Item {
   property bool stateLoaded: false
   property bool started: false
   property var writes: []
+  property bool writing: false
 
   signal message(string level, string text, var metadata)
 
@@ -358,13 +359,16 @@ Item {
   // ---------------------------------------------------------- file writes
 
   // Contents go on stdin; umask 077 makes every file omacast creates 0600.
+  // Quickshell reports running as false inside onExited, where a callback
+  // may save again, so the writing flag holds each job until the last exits.
   function save(mode, path, text, then) {
     lister.writes = lister.writes.concat([{ mode: mode, path: path, text: text, then: then }])
-    if (!writer.running) lister.nextWrite()
+    lister.nextWrite()
   }
 
   function nextWrite() {
-    if (!lister.writes.length) return
+    if (lister.writing || !lister.writes.length) return
+    lister.writing = true
     var job = lister.writes[0]
     lister.writes = lister.writes.slice(1)
     writer.mode = job.mode
@@ -391,8 +395,9 @@ Item {
       if (exitCode !== 0) lister.message("error", "files: could not write " + writer.path, { exitCode: exitCode })
       var then = writer.then
       writer.then = null
-      if (then) then(exitCode === 0)
+      lister.writing = false
       lister.nextWrite()
+      if (then) then(exitCode === 0)
     }
   }
 }
