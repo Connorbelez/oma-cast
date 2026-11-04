@@ -18,25 +18,63 @@ function fixture() {
   return [...vendor, ...project, ...loose]
 }
 
-test("largeSubtrees returns the untouched vendor tree and keeps the signalled one", () => {
+// Runs FileIndex.RECOUNT_SCRIPT the way FileLister does, with an rg that
+// prints `paths` for `rg --files <HOME>` and exits with `rgExit`.
+function recount(t, paths, threshold, rgExit = 0) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "omacast-recount-"))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(dir + "/list", paths.map((p) => p + "\n").join(""))
+  fs.writeFileSync(dir + "/rg", `#!/bin/bash\n[[ $# == 2 && $1 == --files && $2 == ${HOME} ]] || exit 9\ncat ${dir}/list\nexit ${rgExit}\n`, { mode: 0o755 })
+  return spawnSync("bash", ["-c", FileIndex.RECOUNT_SCRIPT, "omacast-recount", HOME, FileIndex.COUNT_PROGRAM, String(threshold)], {
+    encoding: "utf8", env: { ...process.env, PATH: dir + ":" + process.env.PATH }
+  })
+}
+
+function counts(t, paths, threshold) {
+  const r = recount(t, paths, threshold)
+  assert.equal(r.status, 0, r.stderr)
+  return FileIndex.parseCounts(r.stdout)
+}
+
+test("the recount prints the root's file count and each directory over the threshold", (t) => {
+  const r = recount(t, fixture().concat(["/etc/a/b", "/etc/a/c"]), 5)
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(r.stdout.split("\n").filter(Boolean).sort(), [
+    `42\t${HOME}`,
+    `6\t${HOME}/Applications`,
+    `6\t${HOME}/Applications/Engine`,
+    `6\t${HOME}/Applications/Engine/lib`,
+    `6\t${HOME}/Dev`,
+    `6\t${HOME}/Dev/app`
+  ])
+})
+
+test("the recount fails when rg fails", (t) => {
+  assert.equal(recount(t, fixture(), 5, 2).status, 2)
+})
+
+test("parseCounts reads the recount's lines into a count per directory", () => {
+  assert.deepEqual(FileIndex.parseCounts(`42\t${HOME}\n6\t${HOME}/a b\tc\nnoise\n`), { [HOME]: 42, [`${HOME}/a b\tc`]: 6 })
+  assert.deepEqual(FileIndex.parseCounts(""), {})
+})
+
+test("largeSubtrees returns the untouched vendor tree and keeps the signalled one", (t) => {
   const paths = fixture()
   assert.equal(paths.length, 40)
-  assert.deepEqual(FileIndex.largeSubtrees(paths, [`${HOME}/Dev/app`], 5, HOME), [
+  assert.deepEqual(FileIndex.largeSubtrees(counts(t, paths, 5), [`${HOME}/Dev/app`], 5, HOME), [
     { path: `${HOME}/Applications`, count: 6 }
   ])
 })
 
-test("largeSubtrees descends into a touched tree and flags the topmost untouched one", () => {
-  const paths = fixture()
-  assert.deepEqual(FileIndex.largeSubtrees(paths, [`${HOME}/Dev/app`, `${HOME}/Applications/notes`], 5, HOME), [
+test("largeSubtrees descends into a touched tree and flags the topmost untouched one", (t) => {
+  assert.deepEqual(FileIndex.largeSubtrees(counts(t, fixture(), 5), [`${HOME}/Dev/app`, `${HOME}/Applications/notes`], 5, HOME), [
     { path: `${HOME}/Applications/Engine`, count: 6 }
   ])
 })
 
-test("largeSubtrees never flags the root, even with no signals at all", () => {
+test("largeSubtrees never flags the root, even with no signals at all", (t) => {
   const paths = fixture()
-  assert.equal(paths.length, 40)
-  assert.deepEqual(FileIndex.largeSubtrees(paths.concat(paths.map((p) => p + ".bak")), [], 5, HOME), [
+  assert.deepEqual(FileIndex.largeSubtrees(counts(t, paths.concat(paths.map((p) => p + ".bak")), 5), [], 5, HOME), [
     { path: `${HOME}/Applications`, count: 12 },
     { path: `${HOME}/Dev`, count: 12 },
     { path: `${HOME}/notes0`, count: 6 },
@@ -48,9 +86,15 @@ test("largeSubtrees never flags the root, even with no signals at all", () => {
   ])
 })
 
-test("largeSubtrees keeps a tree at the threshold and ignores paths outside the root", () => {
-  const paths = [1, 2, 3, 4, 5].map((i) => `${HOME}/small/f${i}`).concat(["/etc/a/b", "/etc/a/c"])
-  assert.deepEqual(FileIndex.largeSubtrees(paths, [], 5, HOME), [])
+test("at 5,000 a tree of exactly 5,000 stays, 5,001 is flagged, and a sibling's signal covers only itself", (t) => {
+  const files = (dir, n) => Array.from({ length: n }, (_, i) => `${HOME}/${dir}/f${i}`)
+  const paths = [...files("kept", 5000), ...files("vendor/a", 5001), ...files("vendor/b", 3), ...files("proj", 5001)]
+  const c = counts(t, paths, FileIndex.DEFAULT_THRESHOLD)
+  assert.equal(c[HOME], 15005)
+  assert.deepEqual(FileIndex.largeSubtrees(c, [`${HOME}/vendor/b`, `${HOME}/proj-old`], FileIndex.DEFAULT_THRESHOLD, HOME), [
+    { path: `${HOME}/proj`, count: 5001 },
+    { path: `${HOME}/vendor/a`, count: 5001 }
+  ])
 })
 
 test("parseList splits rg output into path, name and dir", () => {
@@ -118,16 +162,6 @@ test("toastFor names the tree with its file count and offers the ignore call", (
       call: { method: "files.ignore", data: { path: `${HOME}/Applications/UnrealEngine` } }
     }]
   })
-})
-
-test("chunks splits on newlines below the size and rejoins to the original", () => {
-  const text = "aaaa\nbb\ncccccc\nd\n"
-  const parts = FileIndex.chunks(text, 6)
-  assert.deepEqual(parts, ["aaaa\n", "bb\n", "cccccc\n", "d\n"])
-  assert.equal(parts.join(""), text)
-  assert.deepEqual(FileIndex.chunks("a-long-line\nb\n", 4), ["a-long-line\n", "b\n"])
-  assert.deepEqual(FileIndex.chunks("no-newline", 4), ["no-newline"])
-  assert.deepEqual(FileIndex.chunks("", 6), [])
 })
 
 const hasRg = spawnSync("rg", ["--version"]).status === 0
