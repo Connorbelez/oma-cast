@@ -71,8 +71,8 @@ Item {
 
   // The list refreshes once the launcher has hidden, where nothing competes
   // with typing or painting. Started in the hide's own tick it shared the GUI
-  // thread with the unmap and took 63 to 88 ms instead of 23 to 40. The
-  // previous list answers until a refresh lands.
+  // thread with the unmap, for a 65 ms median over ten refreshes against 40
+  // ms 250 ms later. The previous list answers until a refresh lands.
   function hidden() {
     if (lister.started) hideRefresh.restart()
   }
