@@ -50,7 +50,7 @@ Item {
   // rg lists every file, private paths included, when an --ignore-file is
   // missing or unreadable, and still exits 0. Exit 3 means "restore them first".
   readonly property string listScript: '[[ -f $2 && -r $2 && -f $3 && -r $3 ]] || exit 3; exec rg --files "${@:4}" --ignore-file "$2" --ignore-file "$3" "$1"'
-  readonly property string signalsScript: "zoxide query --list --score 2>/dev/null; fd -H -t f -p '/\\.git/logs/HEAD$' --changed-within 14d --max-depth 8 --exclude node_modules . \"$1\" 2>/dev/null; exit 0"
+  readonly property string signalsScript: "zoxide query --list --score 2>/dev/null; fd -H -t f -p '/\\.git/logs/HEAD$' --changed-within 14d --max-depth 8 --exclude node_modules \"$1\" 2>/dev/null; exit 0"
 
   onReadyChanged: {
     if (!lister.ready) return
@@ -211,6 +211,7 @@ Item {
     id: signalsRun
     property bool exited: false
     property bool streamed: false
+    workingDirectory: lister.home
     command: ["bash", "-c", lister.signalsScript, "omacast-signals", lister.home]
     stdout: StdioCollector { id: signalsOut; onStreamFinished: { signalsRun.streamed = true; signalsRun.settle() } }
     onStarted: { signalsRun.exited = false; signalsRun.streamed = false }
