@@ -36,6 +36,25 @@ function counts(t, paths, threshold) {
   return FileIndex.parseCounts(r.stdout)
 }
 
+test("a failed recount is retried after an hour, a stale one after a day, and a forced one at once", () => {
+  const h = 3600000, d = 86400000
+  assert.equal(FileIndex.recountDue(0, 0, false, h), true)
+  assert.equal(FileIndex.recountDue(1000, 0, false, 1000 + d - 1), false)
+  assert.equal(FileIndex.recountDue(1000, 0, false, 1000 + d), true)
+  assert.equal(FileIndex.recountDue(1000, 0, true, 2000), true)
+  assert.equal(FileIndex.recountDue(0, 5000, true, 5000 + h - 1), false)
+  assert.equal(FileIndex.recountDue(0, 5000, false, 5000 + h), true)
+})
+
+test("awk prints a directory only when it holds more files than the threshold", (t) => {
+  const paths = []
+  for (let i = 1; i <= 5; i++) paths.push(`${HOME}/exact/f${i}`)
+  for (let i = 1; i <= 6; i++) paths.push(`${HOME}/over/f${i}`)
+  const r = recount(t, paths, 5)
+  assert.equal(r.status, 0, r.stderr)
+  assert.deepEqual(r.stdout.split("\n").filter(Boolean).sort(), [`11\t${HOME}`, `6\t${HOME}/over`])
+})
+
 test("the recount prints the root's file count and each directory over the threshold", (t) => {
   const r = recount(t, fixture().concat(["/etc/a/b", "/etc/a/c"]), 5)
   assert.equal(r.status, 0, r.stderr)

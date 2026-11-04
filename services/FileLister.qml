@@ -27,6 +27,7 @@ Item {
 
   property var subtrees: []
   property double recountedAt: 0
+  property double recountFailedAt: 0
   property int recountFiles: 0
   property bool recounting: false
   property bool recountDue: false
@@ -86,7 +87,7 @@ Item {
   // A due recount waits for the refresh, so the list never queues behind it.
   function catchUp(maxAgeMs) {
     if (lister.stale(maxAgeMs)) lister.refresh(lister.defaultRoots)
-    if (!lister.recountDue && Date.now() - lister.recountedAt < FileIndex.RECOUNT_MS) return
+    if (!FileIndex.recountDue(lister.recountedAt, lister.recountFailedAt, lister.recountDue, Date.now())) return
     if (lister.refreshing) lister.recountAfterRefresh = true
     else lister.recount()
   }
@@ -270,6 +271,7 @@ Item {
     if (!outcome.counts) {
       recountWatchdog.stop()
       lister.recounting = false
+      lister.recountFailedAt = Date.now()
       return
     }
     var counts = outcome.counts
@@ -328,6 +330,7 @@ Item {
     interval: 65000
     onTriggered: {
       lister.recounting = false
+      lister.recountFailedAt = Date.now()
       lister.giveUp("recount", [recountRun, signalsRun])
     }
   }

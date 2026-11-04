@@ -5,6 +5,7 @@
 var DEFAULT_THRESHOLD = 5000
 var ASK_AGAIN_MS = 7 * 86400000
 var RECOUNT_MS = 86400000
+var RECOUNT_RETRY_MS = 3600000
 var REFRESH_AFTER_MS = 30000
 var OPEN_REFRESH_AFTER_MS = 600000
 
@@ -108,6 +109,13 @@ function parseCounts(text) {
 
 // Under pipefail the recount exits with rg's 2 for one unreadable folder
 // while awk still counts the rest, so a total over zero is a usable count.
+// A failed or timed-out recount is retried no sooner than an hour later, so a
+// home where the walk hangs does not cost a core on every hide.
+function recountDue(recountedAt, failedAt, forced, now) {
+  if (failedAt && now - failedAt < RECOUNT_RETRY_MS) return false
+  return forced || !recountedAt || now - recountedAt >= RECOUNT_MS
+}
+
 function recountOutcome(run, root) {
   if (run.exitStatus === 0 && run.exitCode === 124) return { warnings: ["files: recount timed out"] }
   var counts = parseCounts(run.text)
@@ -270,7 +278,7 @@ function toastFor(tree, home, ignoreMethod) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, REFRESH_AFTER_MS: REFRESH_AFTER_MS, OPEN_REFRESH_AFTER_MS: OPEN_REFRESH_AFTER_MS,
+    DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, RECOUNT_RETRY_MS: RECOUNT_RETRY_MS, recountDue: recountDue, REFRESH_AFTER_MS: REFRESH_AFTER_MS, OPEN_REFRESH_AFTER_MS: OPEN_REFRESH_AFTER_MS,
     DEFAULT_IGNORES: DEFAULT_IGNORES, PRIVATE_PATHS: PRIVATE_PATHS, defaultIgnoreText: defaultIgnoreText,
     RECOUNT_SCRIPT: RECOUNT_SCRIPT, COUNT_PROGRAM: COUNT_PROGRAM,
     parseList: parseList, listOutcome: listOutcome, parseSignals: parseSignals, parseCounts: parseCounts, recountOutcome: recountOutcome, largeSubtrees: largeSubtrees, ignores: ignores, badIgnoreLines: badIgnoreLines,

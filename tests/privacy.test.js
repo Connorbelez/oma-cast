@@ -255,6 +255,8 @@ test("the list script runs rg with fixed flags only while both ignore files are 
   }).status
   assert.equal(list("/home/u", ignore, untouched), 0)
   assert.equal(list("/home/u/.config", ignore, untouched, "--hidden"), 0)
+  fs.mkdirSync(home + "/dir.ignore")
+  assert.equal(list("/home/u", home + "/dir.ignore", untouched), 3)
   if (process.getuid() !== 0) {
     fs.chmodSync(untouched, 0o000)
     assert.equal(list("/home/u", ignore, untouched), 3)
