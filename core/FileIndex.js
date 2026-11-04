@@ -50,9 +50,10 @@ function parseSignals(text) {
   return dirs
 }
 
-// Counts every directory under root once per distinct parent directory, not
-// once per file, so 300k paths cost one lastIndexOf each. The root itself is
-// never flagged: a home with no signals yet would otherwise drop every file.
+// Counts files per directory first and only then adds each directory's count
+// to its ancestors, so the ancestor walk runs once per directory (48k on the
+// dev home), not once per file (327k). The root itself is never flagged: a
+// home with no signals yet would otherwise drop every file.
 function largeSubtrees(paths, signals, threshold, root) {
   var direct = Object.create(null)
   for (var i = 0; i < paths.length; i++) {
@@ -133,8 +134,6 @@ function groupDigits(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
 }
 
-// The tree to ask about now: one the ignore file does not cover yet, last
-// asked about at least ASK_AGAIN_MS ago.
 function treeToAsk(subtrees, askedAt, ignoreText, root, nowMs) {
   for (var i = 0; i < subtrees.length; i++) {
     var t = subtrees[i]
