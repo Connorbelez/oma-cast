@@ -149,6 +149,7 @@ const FILE_LISTER_ARGS = {
   "configRun.root": "a root, absolute (Backend.checkFilePath)",
   "lister.ignoreFile": "~/.config/omacast/file-search.ignore",
   "lister.untouchedFile": "the large untouched subtrees, as ignore patterns",
+  "lister.listScript": "a constant script",
   "lister.signalsScript": "a constant script",
   "lister.writeScript": "a constant script",
   "FileIndex.RECOUNT_SCRIPT": "a constant script",
@@ -168,10 +169,6 @@ test("every process FileLister starts has fixed argv", () => {
   assert.equal(commands.length, 5)
   for (const argv of commands) {
     for (const arg of argv) assert.ok(/^"[^"$`\\]*"$/.test(arg) || arg in FILE_LISTER_ARGS, `${arg} in [${argv}]`)
-    if (argv[0] === '"rg"') {
-      const literals = argv.filter((a) => a.startsWith('"')).slice(1)
-      for (const flag of literals) assert.ok(['"--files"', '"--hidden"', '"--ignore-file"'].includes(flag), flag)
-    }
   }
   const saves = [...source.matchAll(/lister\.save\(([^,]+),\s*([^,]+),/g)].map((m) => [m[1].trim(), m[2].trim()])
   assert.ok(saves.length >= 4)
@@ -205,6 +202,37 @@ test("the file-search write script makes 0600 files under umask 022 and never cl
   assert.equal(mode(state), 0o600)
   assert.deepEqual(fs.readdirSync(home).sort(), ["file-search.ignore", "file-search.json"])
   assert.notEqual(run("delete", state, "").status, 0)
+})
+
+// rg lists every file, private paths included, when an --ignore-file is
+// missing or unreadable, and still exits 0.
+test("the list script runs rg with fixed flags only while both ignore files are readable", (t) => {
+  const home = tempHome(t)
+  const log = home + "/cmdlines"
+  fs.writeFileSync(home + "/rg", '#!/bin/bash\necho "$*" >>"$LOG"\n', { mode: 0o755 })
+  const ignore = home + "/file-search.ignore"
+  const untouched = home + "/file-search-untouched.ignore"
+  fs.writeFileSync(ignore, ".ssh/\n")
+  fs.writeFileSync(untouched, "")
+  const list = (...args) => spawnSync("bash", ["-c", fileListerScript("listScript"), "omacast-files", ...args], {
+    encoding: "utf8", env: { ...process.env, LOG: log, PATH: home + ":" + process.env.PATH }
+  }).status
+  assert.equal(list("/home/u", ignore, untouched), 0)
+  assert.equal(list("/home/u/.config", ignore, untouched, "--hidden"), 0)
+  if (process.getuid() !== 0) {
+    fs.chmodSync(untouched, 0o000)
+    assert.equal(list("/home/u", ignore, untouched), 3)
+  }
+  fs.rmSync(untouched)
+  fs.mkdirSync(untouched)
+  assert.equal(list("/home/u", ignore, untouched), 3)
+  fs.rmSync(ignore)
+  assert.equal(list("/home/u/.config", ignore, home + "/rg", "--hidden"), 3)
+  assert.equal(fs.readFileSync(log, "utf8"), [
+    `--files --ignore-file ${ignore} --ignore-file ${untouched} /home/u`,
+    `--files --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`,
+    ""
+  ].join("\n"))
 })
 
 test("the usage-signal script passes only fixed flags and the home dir to zoxide and fd", (t) => {
