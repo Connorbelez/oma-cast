@@ -298,6 +298,16 @@ cmd_doctor() {
   else
     printf '  info  no flea-search helper; using the built-in matcher (build it with: omacast build-search)\n'
   fi
+  local files subtrees
+  if files=$(omarchy-shell "$IPC_TARGET" call files.list '{"limit":0}' 2>/dev/null) && jq -e '.ok and .data.listedAt' <<<"$files" >/dev/null 2>&1; then
+    jq -r '.data | "  ok    file search lists \(.count) files from \(.roots | join(" and ")) in \(.listMs) ms",
+      "  info  file search ignore file \(.ignoreFile)"' <<<"$files"
+    subtrees=$(omarchy-shell "$IPC_TARGET" call files.largeSubtrees '{}' 2>/dev/null)
+    jq -r '.data.subtrees[]? | "  info  left out, large and untouched: \(.display) (\(.count) files\(if .ignored then ", in the ignore file" else "" end))"' <<<"$subtrees" 2>/dev/null
+  else
+    printf '  FAIL  file search has no file list yet\n'
+    bad=1
+  fi
   local base
   for base in "${XDG_CONFIG_HOME:-$HOME/.config}" "${XDG_DATA_HOME:-$HOME/.local/share}" \
     "${XDG_CACHE_HOME:-$HOME/.cache}" "${XDG_STATE_HOME:-$HOME/.local/state}"; do
