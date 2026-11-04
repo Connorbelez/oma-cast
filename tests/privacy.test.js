@@ -3,7 +3,7 @@ const assert = require("node:assert/strict")
 const fs = require("node:fs")
 const os = require("node:os")
 const path = require("node:path")
-const { spawnSync } = require("node:child_process")
+const { spawn, spawnSync } = require("node:child_process")
 const Paths = require("../core/Paths.js")
 
 // Marketplace review: histories must stay private under a normal umask 022,
@@ -202,6 +202,24 @@ test("the file-search write script makes 0600 files under umask 022 and never cl
   assert.equal(mode(state), 0o600)
   assert.deepEqual(fs.readdirSync(home).sort(), ["file-search.ignore", "file-search.json"])
   assert.notEqual(run("delete", state, "").status, 0)
+})
+
+test("a create killed before its content arrives leaves no file behind for the next create to skip", async (t) => {
+  const home = tempHome(t)
+  const file = home + "/file-search.ignore"
+  const script = fileListerScript("writeScript")
+  const child = spawn("bash", ["-c", script, "omacast-files", "create", file], { stdio: ["pipe", "ignore", "ignore"], detached: true })
+  const exited = new Promise((resolve) => child.on("exit", resolve))
+  for (let i = 0; i < 200 && !fs.readdirSync(home).length; i++) await new Promise((r) => setTimeout(r, 10))
+  assert.ok(fs.readdirSync(home).length, "the redirect ran")
+  process.kill(-child.pid, "SIGKILL")
+  await exited
+  assert.equal(fs.existsSync(file), false)
+  const r = spawnSync("bash", ["-c", script, "omacast-files", "create", file], { input: "node_modules/\n", encoding: "utf8" })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(fs.readFileSync(file, "utf8"), "node_modules/\n")
+  assert.equal(mode(file), 0o600)
+  assert.deepEqual(fs.readdirSync(home), ["file-search.ignore"])
 })
 
 // rg lists every file, private paths included, when an --ignore-file is
