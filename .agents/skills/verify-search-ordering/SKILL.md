@@ -41,7 +41,7 @@ Read every result with the p3-stack `/statechart` skill, pointing it at `tests/f
 
 ### Coverage record
 
-Last confirmed against the code at commit **`98bd0bb`** (sync commit).
+Last confirmed against the code at commit **`10e58bc`** (sync commit).
 
 | Code | Model | Anchor |
 |---|---|---|
@@ -123,7 +123,7 @@ After a covered change:
 To see what changed since the last sync:
 
 ```sh
-git diff 98bd0bb -- ui/LauncherWindow.qml services/NativeSearch.qml Backend.qml search/src/protocol.rs
+git diff 10e58bc -- ui/LauncherWindow.qml services/NativeSearch.qml Backend.qml search/src/protocol.rs
 ```
 
 `/maintain-formal-verification-skill` covers bringing this back in line after changes that skipped the check.
