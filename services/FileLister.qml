@@ -55,15 +55,23 @@ Item {
     if (lister.started || !lister.ignoreFileReady || !lister.stateLoaded) return
     lister.save("replace", lister.untouchedFile, FileIndex.ignoreFileText(lister.subtrees, lister.home), function() {
       lister.started = true
+      if (lister.recountedAt) lister.refresh(lister.defaultRoots)
       if (Date.now() - lister.recountedAt >= FileIndex.RECOUNT_MS) lister.recount()
-      else lister.refresh(lister.defaultRoots)
     })
   }
   onIgnoreFileReadyChanged: lister.begin()
   onStateLoadedChanged: lister.begin()
 
+  // The previous list answers until the refresh lands, so it starts after
+  // the launcher's first frames instead of queueing behind them.
   function opened() {
-    if (lister.started && Date.now() - lister.listedAt > FileIndex.REFRESH_AFTER_MS) lister.refresh(lister.defaultRoots)
+    if (lister.started && Date.now() - lister.listedAt > FileIndex.REFRESH_AFTER_MS) openRefresh.restart()
+  }
+
+  Timer {
+    id: openRefresh
+    interval: 250
+    onTriggered: lister.refresh(lister.defaultRoots)
   }
 
   // The daily recount moves a 30 MB listing to the worker, so it waits for

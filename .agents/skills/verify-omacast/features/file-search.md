@@ -4,7 +4,7 @@ omacast keeps a list of the user's files in memory, built with `rg --files` over
 
 ## Sub-features
 
-- `files-list` the in-memory list. It is built when the plugin loads, refreshed on open once it is older than 30 s, and kept as it was when rg fails. Each listing logs `[omacast] [info] files: listed <n> paths in <ms> ms`.
+- `files-list` the in-memory list. It is built when the plugin loads, refreshed 250 ms after an open once it is older than 30 s, and kept as it was when rg fails. Each listing logs `[omacast] [info] files: listed <n> paths in <ms> ms`.
 - `files-ignore-file` `~/.config/omacast/file-search.ignore`, created with the build dirs and the private paths on first start, mode 0600. Patterns with a slash are relative to the home dir.
 - `files-large-subtrees` the daily recount (`files: counted <n> paths, <k> large untouched subtrees in <ms> ms`). It runs at load when the cached result in `~/.cache/omacast/file-search.json` is a day old, and otherwise on hide. Detected trees go into `~/.cache/omacast/file-search-untouched.ignore`, so the list leaves them out whether or not the user accepts the toast.
 - `files-toast` `files.takeToast` returns "Skipping ~/Applications/UnrealEngine (300,136 files, untouched). Add to ignore file?" once per tree, records `fileSearch.askedAt[path]` in `db/settings.json`, and offers it again after 7 days. Its action calls `files.ignore`. The launcher does not call it yet (see Gotchas).
