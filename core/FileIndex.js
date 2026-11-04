@@ -38,15 +38,16 @@ function parseList(text) {
 }
 
 // Exit 3 is the list script's missing ignore file and 124 is timeout's. rg
-// exits 2 for any error, and exitStatus 1 means a signal ended the run, so
-// either may leave a list cut short.
+// exits 1 for a root with no files and 2 for any error, and exitStatus 1
+// means a signal ended the run, so either of the last two may leave a list
+// cut short.
 function listOutcome(runs) {
   if (runs.some(function(r) { return r.exitStatus === 0 && r.exitCode === 124 })) return { warnings: ["files: refresh timed out"] }
   if (runs.some(function(r) { return r.exitStatus === 0 && r.exitCode === 3 })) return { missing: true }
   var warnings = []
   var failed = false
   runs.forEach(function(r) {
-    if (r.exitStatus === 0 && r.exitCode === 0) return
+    if (r.exitStatus === 0 && (r.exitCode === 0 || (r.exitCode === 1 && !r.text))) return
     if (r.exitStatus === 0 && r.exitCode === 2 && r.text) {
       warnings.push("files: rg exited 2 for " + r.root + "; listed what it could read")
       return

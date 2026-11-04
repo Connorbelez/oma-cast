@@ -120,7 +120,7 @@ test("parseList splits rg output into path, name and dir", () => {
   assert.deepEqual(FileIndex.parseList(""), [])
 })
 
-test("listOutcome swaps in the list when every run exited normally with 0, or with 2 and output", () => {
+test("listOutcome swaps in the list when every run exited 0, 1 with no files, or 2 with output", () => {
   const run = (root, exitCode, exitStatus, text) => ({ root, exitCode, exitStatus, text })
   const home = run(HOME, 0, 0, `${HOME}/a\n`)
   assert.deepEqual(FileIndex.listOutcome([home, run(`${HOME}/.config`, 0, 0, `${HOME}/.config/b\n`)]), {
@@ -135,6 +135,10 @@ test("listOutcome swaps in the list when every run exited normally with 0, or wi
   assert.deepEqual(FileIndex.listOutcome([run(HOME, 2, 0, `${HOME}/a\n`)]), {
     rows: [{ path: `${HOME}/a`, name: "a", dir: HOME }],
     warnings: [`files: rg exited 2 for ${HOME}; listed what it could read`]
+  })
+  assert.deepEqual(FileIndex.listOutcome([home, run(`${HOME}/.config`, 1, 0, "")]), { rows: [{ path: `${HOME}/a`, name: "a", dir: HOME }] })
+  assert.deepEqual(FileIndex.listOutcome([home, run(`${HOME}/.config`, 1, 0, `${HOME}/.config/b\n`)]), {
+    warnings: [`files: rg exited 1 for ${HOME}/.config; keeping the previous list`]
   })
   assert.deepEqual(FileIndex.listOutcome([home, run(`${HOME}/.config`, 124, 0, `${HOME}/.config/b\n`)]), { warnings: ["files: refresh timed out"] })
   assert.deepEqual(FileIndex.listOutcome([run(HOME, 3, 0, ""), home]), { missing: true })
