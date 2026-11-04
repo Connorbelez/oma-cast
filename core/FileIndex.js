@@ -124,32 +124,93 @@ function largeSubtrees(counts, signals, threshold, root) {
   return found.sort(function(a, b) { return b.count - a.count || (a.path < b.path ? -1 : 1) })
 }
 
-function globSource(glob) {
-  return glob.replace(/[.+^${}()|\\]/g, "\\$&").replace(/\*\*/g, "\u0000").replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]").replace(/\u0000/g, ".*")
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\\/]/g, "\\$&")
 }
 
-// Whether a gitignore line in the ignore file already covers the directory.
-// Plain names, anchored paths and * globs; negations are not honoured.
+// One gitignore glob as a RegExp source, read the way rg reads it, or null
+// where rg rejects the line: a dangling "\" or an unbalanced "{" or "}".
+// An unclosed "[" is a literal "[", as it is in rg.
+function globSource(glob) {
+  var i = 0
+  function sequence(inBraces) {
+    var out = ""
+    while (i < glob.length) {
+      var c = glob.charAt(i)
+      if (inBraces && (c === "," || c === "}")) return out
+      i++
+      if (c === "\\") {
+        if (i >= glob.length) return null
+        out += escapeRegExp(glob.charAt(i++))
+      } else if (c === "*" && glob.charAt(i) === "*") {
+        i++
+        if (glob.charAt(i) === "/") { i++; out += "(?:.*/)?" } else out += ".*"
+      } else if (c === "*") {
+        out += "[^/]*"
+      } else if (c === "?") {
+        out += "[^/]"
+      } else if (c === "[") {
+        var negated = glob.charAt(i) === "!" || glob.charAt(i) === "^"
+        var close = glob.indexOf("]", i + (negated ? 2 : 1))
+        if (close < 0) { out += "\\["; continue }
+        var members = glob.slice(negated ? i + 1 : i, close).replace(/[\\\]\[^]/g, "\\$&")
+        out += negated ? "[^/" + members + "]" : "[" + members + "]"
+        i = close + 1
+      } else if (c === "{") {
+        var alternatives = []
+        for (;;) {
+          var alternative = sequence(true)
+          if (alternative === null || i >= glob.length) return null
+          alternatives.push(alternative)
+          if (glob.charAt(i++) === "}") break
+        }
+        out += "(?:" + alternatives.join("|") + ")"
+      } else if (c === "}") {
+        return null
+      } else {
+        out += escapeRegExp(c)
+      }
+    }
+    return inBraces ? null : out
+  }
+  return sequence(false)
+}
+
+// The ignore file's lines as RegExps over a path relative to the root, and
+// the lines rg rejects. A line with a slash before its end is anchored at
+// the root; a plain name matches any path segment. Negations are skipped.
+function ignorePatterns(ignoreText) {
+  var lines = String(ignoreText || "").split("\n")
+  var patterns = []
+  var bad = []
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].replace(/(^|[^\\])\s+$/, "$1")
+    if (!line || line.charAt(0) === "#" || line.charAt(0) === "!") continue
+    var glob = line.replace(/\/$/, "")
+    var anchored = glob.indexOf("/") >= 0
+    var source = globSource(anchored ? glob.replace(/^\//, "") : glob)
+    var pattern = null
+    if (source !== null) {
+      try { pattern = new RegExp((anchored ? "^" : "(?:^|/)") + source + "(?:/|$)") } catch (e) {}
+    }
+    if (pattern) patterns.push(pattern)
+    else bad.push(lines[i])
+  }
+  return { patterns: patterns, bad: bad }
+}
+
+// Whether a line in the ignore file already covers the directory.
 function ignores(ignoreText, root, dir) {
   var rel = dir.slice(root.length + 1)
-  var lines = String(ignoreText || "").split("\n")
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i].replace(/\s+$/, "")
-    if (!line || line.charAt(0) === "#" || line.charAt(0) === "!") continue
-    var pattern = line.replace(/\/+$/, "")
-    if (pattern.indexOf("/") >= 0) {
-      if (new RegExp("^" + globSource(pattern.replace(/^\//, "")) + "(/|$)").test(rel)) return true
-    } else {
-      var segment = new RegExp("^" + globSource(pattern) + "$")
-      if (rel.split("/").some(function(s) { return segment.test(s) })) return true
-    }
-  }
-  return false
+  return ignorePatterns(ignoreText).patterns.some(function(p) { return p.test(rel) })
+}
+
+function badIgnoreLines(ignoreText) {
+  return ignorePatterns(ignoreText).bad
 }
 
 function ignoreLine(root, dir) {
-  return "/" + dir.slice(root.length + 1).replace(/[\\*?[]/g, "\\$&").replace(/ $/, "\\ ") + "/"
+  return "/" + dir.slice(root.length + 1).replace(/[\\*?[\]{}]/g, "\\$&") + "/"
 }
 
 function ignoreFileText(subtrees, root) {
@@ -192,7 +253,7 @@ if (typeof module !== "undefined") {
     DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, REFRESH_AFTER_MS: REFRESH_AFTER_MS,
     DEFAULT_IGNORES: DEFAULT_IGNORES, PRIVATE_PATHS: PRIVATE_PATHS, defaultIgnoreText: defaultIgnoreText,
     RECOUNT_SCRIPT: RECOUNT_SCRIPT, COUNT_PROGRAM: COUNT_PROGRAM,
-    parseList: parseList, listOutcome: listOutcome, parseSignals: parseSignals, parseCounts: parseCounts, largeSubtrees: largeSubtrees, ignores: ignores,
+    parseList: parseList, listOutcome: listOutcome, parseSignals: parseSignals, parseCounts: parseCounts, largeSubtrees: largeSubtrees, ignores: ignores, badIgnoreLines: badIgnoreLines,
     ignoreLine: ignoreLine, ignoreFileText: ignoreFileText, displayPath: displayPath, groupDigits: groupDigits,
     treeToAsk: treeToAsk, toastFor: toastFor
   }

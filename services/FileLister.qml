@@ -36,6 +36,7 @@ Item {
   property double signalsAt: 0
 
   property string ignoreText: ""
+  property var reportedLines: []
   property bool ignoreFileReady: false
   property bool stateLoaded: false
   property bool started: false
@@ -315,6 +316,11 @@ Item {
     onLoaded: {
       var changed = lister.ignoreText !== text()
       lister.ignoreText = text()
+      FileIndex.badIgnoreLines(lister.ignoreText).forEach(function(line) {
+        if (lister.reportedLines.indexOf(line) >= 0) return
+        lister.reportedLines.push(line)
+        lister.message("warning", "files: rg cannot read the ignore line " + JSON.stringify(line) + ", so it matches nothing", null)
+      })
       if (changed) lister.refresh(lister.defaultRoots)
     }
   }
