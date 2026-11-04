@@ -538,53 +538,59 @@ Grammar: `{keyword opt="v" opt2='v' | modifier | modifier}`. Quotes accepted: `"
 
 **Raycast's design, for reference [O].** A persistent index ("minidex", an `fst` map) over configured scopes, kept fresh by file-system events, with content extraction in a separate process. Settings: scopes, ignore patterns, include hidden, use ignore files, index removable drives, content search. Results: name match first, then path, sorted by recency, with a preview detail pane and Quick Look.
 
-**Why we diverge.** The goal is the best way to find a file the user means. Three facts from measuring the dev machine (2026-11-04, warm page cache, Omarchy 4.x):
+**Why we diverge.** The goal is the best way to find a file the user means. The numbers below come from the dev machine on 2026-11-04 (Omarchy 4.x, ripgrep 15.2.0, 24 cores, NVMe, btrfs). The prototypes and their full output are in `docs/phase7-prototypes/`.
 
-| Operation | All of `$HOME` | Without three Unreal Engine copies and `node_modules` |
+| Operation | All of `$HOME` | Without the large untouched subtrees |
 |---|---|---|
-| List files (`rg --files`) | 358 ms, 925k files | 14 ms, 14.9k files |
-| Search contents for one word (`rg -l -F`) | 13.6 s | 25 to 160 ms |
-| Fuzzy filter "spec" | 922 ms, 706k hits (full path) | 22 ms, 688 hits (file names only) |
+| List files (`rg --files`) | 196 ms, 327,643 files | 11 to 13 ms, 14,949 files |
+| Search contents for one word (`rg -l -F -i -f -`), warm | not measured | 24 to 25 ms, whatever the query |
+| Search contents, file pages evicted (`posix_fadvise`), directory cache warm | | 148 to 156 ms |
+| List files, directory cache cold | needs root to measure; an operator step in the Phase 7 plan | |
 
-1. Vendored and downloaded trees, not the index, decide the cost. Excluding them removes 98% of the work.
-2. Without them, `ripgrep` is fast enough that a persistent index buys almost nothing at this scale.
+1. Two subtrees hold 95% of the files, `~/Applications/UnrealEngine` (300,136) and `~/node_modules` (12,558). Detecting them removes the cost.
+2. Without them, `ripgrep` lists and searches the tree in tens of milliseconds, so a persistent index buys nothing at this scale.
 3. Fuzzy matching across the full path matches nearly everything. The file name has to carry the match.
+4. The QML JS engine runs a character-loop matcher 25 times slower than node (45 to 52 ms per keystroke over 14,949 names). One native `RegExp` per name takes 1 to 4 ms. The fallback matcher is regex-based.
 
 `ripgrep`, `fd` and `zoxide` are in Omarchy's base packages (`$OMARCHY_PATH/install/omarchy-base.packages`), so v1 adds no runtime dependency. A persistent index stays a later upgrade, taken only when a measured trigger below fires.
 
 **Listing [D].**
-- `rg --files` over the configured roots (default `$HOME`). It honours `.gitignore`, `.ignore` and `.rgignore`, skips hidden files, and reads omacast's own ignore file `~/.config/omacast/file-search.ignore` through `--ignore-file`. The default ignore file lists `node_modules/`, `.cache/`, `target/`, `.git/` and the private paths below.
-- The path list lives in memory in the flea-search helper, or in the JS fallback when the helper is not built. Refresh it in the background when the launcher opens and the list is older than 30 s [I], and keep the previous list until the new one arrives. Nothing is written to disk.
-- **Large untouched subtrees** [D]. A directory holding more than 5,000 files [I] with no usage signal anywhere inside it is a large subtree. Its paths are refreshed at most once a day [I] in a separate `rg` pass, they are left out of content search, and their files match only on an exact or prefix file name. The first time one is detected, a toast offers to add it to the ignore file. Never exclude one silently.
-- **Private paths, excluded by default** [D]: `~/.ssh`, `~/.gnupg`, `~/.password-store`, `~/.local/share/keyrings`, browser profiles (`~/.mozilla`, `~/.config/chromium`, `~/.config/google-chrome`, `~/.config/BraveSoftware`), and the contents of `.env*` files.
+- `rg --files` over two roots. `$HOME` without hidden files, and `~/.config` with `--hidden` because Omarchy users edit `~/.config/hypr` and `~/.config/omarchy`. Both runs honour `.gitignore`, `.ignore` and `.rgignore`, and read omacast's own ignore file `~/.config/omacast/file-search.ignore` through `--ignore-file`. The default ignore file lists `node_modules/`, `.cache/`, `target/`, `.git/`, `Cache/`, `Code Cache/`, `Service Worker/`, `compile-cache/` and the private paths below. On the dev machine `~/.config` holds 22,149 files, of which the browser profiles and the cache directories are 20,000.
+- The path list lives in memory in QML (the file name, the directory, the mtime) and, when the flea-search helper is built, in a second helper catalog. Refresh it in the background when the launcher opens and the list is older than 30 s [I], and keep the previous list until the new one arrives. Nothing is written to disk.
+- **Large untouched subtrees** [D, prototyped]. A directory holding more than 5,000 files with no usage signal anywhere inside it is a large untouched subtree. Detection walks the tree top down and never descends into one. The threshold 5,000 flags exactly the two vendor trees on the dev machine. 2,000 also flags two of the user's own project trees, so it is too low. `~/Dev` (6,774 files) is kept by its zoxide entry.
+  - Its files are **left out of the list**, not matched on a reduced band as an earlier draft said. 300,000 names would take the regex matcher past the keystroke budget and would not fit the helper's 20,000-entry catalog.
+  - Never exclude one silently. The first time one is detected a toast names it with its file count. ↵ adds it to the ignore file. Esc asks again after 7 days [I]. The `files.largeSubtrees` RPC lists the current ones.
+  - A tree stops being untouched when a usage signal appears inside it (a zoxide entry, an active git repo, a file opened from omacast). It then joins the list on the next refresh. The list is recounted once a day [I] by a full `rg --files` pass (196 ms warm on the dev machine).
+- **Private paths, excluded by default** [D]: `~/.ssh`, `~/.gnupg`, `~/.password-store`, `~/.local/share/keyrings`, browser profiles (`~/.mozilla`, `~/.zen`, `~/.config/chromium`, `~/.config/google-chrome`, `~/.config/BraveSoftware`, `~/.config/zen`), and the contents of `.env*` files.
 
 **Usage signals [D].** The ranking depends on these, so each one names its source:
 
 | Signal | Source | Notes |
 |---|---|---|
-| Opened from omacast | `core/Frecency.js` keyed by absolute path, in `db/frecency.json` | Same formula as root search (+100 per open, 10-day half-life). |
-| Opened in Neovim | `~/.local/state/nvim/shada/main.shada` file marks and jump list | It's msgpack; read with a small parser in the helper [I]. The strongest signal on Omarchy. |
+| Opened from omacast | `core/Frecency.js` keyed by absolute path, in `db/frecency.json` | Same formula as root search (+100 per open, 10-day half-life). The only signal that lifts a band. |
 | Directory frecency | `zoxide query --list --score` | Seeds folder scores. No user text in argv. |
-| Last changed | the file's mtime | A recency signal, not the final tiebreak. |
-| Active project | a git repo root whose `HEAD` reflog changed in the last 14 days [I] | Projects become folder nodes with their own weight. |
+| Active project | a git repo root whose `.git/logs/HEAD` changed in the last 14 days | Projects become folder nodes with their own weight (+2 [I]). |
+| Last changed | the file's mtime | A recency signal with a 30-day half-life [I], not the final tiebreak. |
+| Opened in Neovim | `~/.local/state/nvim/shada/main.shada` file marks and jump list | msgpack, read by a small parser [I]. The dev machine's file is 267 bytes, so the signal is unproven and lands last. |
 
 Not used: access times (useless under `relatime`), the GTK recent-files list (absent on Omarchy), inotify open events (flooded by git, rg and the listing itself) and fanotify (needs root).
 
-**Folder-tree prior [D].** The directory tree is the graph. A folder's weight is the decayed sum of its descendants' usage plus its zoxide score. A file inherits its nearest weighted ancestor's weight, decayed by depth [I]. So `~/Projects/oma-cast/README.md` outranks `~/Downloads/Linux_Unreal_Engine/README.md`. Co-access edges (files opened together) are a later addition, once omacast and Neovim opens give enough events.
+**Folder-tree prior [D, prototyped].** The directory tree is the graph. A folder's weight is its zoxide score, plus 2 when it is an active project, plus `ln(1 + opens / 100)` for every omacast open below it. A file inherits its nearest weighted ancestor's weight divided by `1 + 0.5 × distance` [I]. So `~/Projects/oma-cast/README.md` outranks `~/Downloads/Linux_Unreal_Engine/README.md`. Co-access edges (files opened together) are a later addition, once omacast opens give enough events.
 
-**Ranking hierarchy [D].** Files get their own ranker, inside the Files section and the Search Files command. Root items keep the ported Raycast ranker (§0 rule 5).
-1. **Match band on the file name**: exact (with or without the extension), then prefix, then word start, then subsequence, then typo (Flea's tiers, as for apps).
-2. **Path-only band.** Every query word matches a path segment and the last word matches the file name: `oma spec` finds `oma-cast/SPEC.md`.
-3. **Within a band**, sort by a blended score: personal frecency, then recency, then the folder-tree prior. Weights are tuned against a recorded query set [I].
-4. **Bounded lift.** Usage can move a file up at most one band. Nothing beats an exact file-name match.
+**Ranking hierarchy [D, prototyped].** Files get their own ranker (`core/FileRanker.js`), inside the Files section and the Search Files command. Root items keep the ported Raycast ranker (§0 rule 5).
+1. **Match band on the file name**, lower is better. 0 exact (with or without the extension), 1 prefix, 2 word start (after `-`, `_`, `.` or a space), 3 substring, 4 subsequence, 5 typo (helper only). A multi-word query whose every word is a word start in the name is band 2.
+2. **Path-only band 6.** Every word but the last is a prefix or word start of a path segment, and the last word matches the file name as above. `oma spec` finds `oma-cast/SPEC.md` and nothing else on the dev machine. Segment matching by subsequence was tried and put `sales` on `wagertech-cms-v2-migration`.
+3. **Within a band**, sort by `ln(1 + opens / 100) + 0.5 × recency + 0.5 × prior`, then by shorter name. The weights come from the prototype's 13-query set and are open to tuning against a recorded query set.
+4. **Bounded lift.** A file opened from omacast within its half-life (frecency at least 100) moves up one band, from band 2 or lower, never into exact or prefix. The prototype's unbounded blend let a twenty-times-opened subsequence match beat the prefix matches for `launch` and a fifty-times-opened `SpectrumCycling.ui` beat the exact `SPEC.md`. Lifting on the folder prior let an untouched file in the active project beat a twice-opened file.
 5. **Content matches** sit in their own section, always below name matches.
 
 An empty query in Search Files shows "Recent & frequent files", ranked by usage alone.
 
-**Content search, revealed progressively [D].**
-- It appears when the query has at least 3 characters and has been still for 150 ms [I], and either name matches number fewer than 5 [I] or the query contains a space.
-- It runs `rg --json -F -i -f -` with the query on stdin (§0 rule 6), over candidate files in folder-tree order. Files over 1 MB and binaries are skipped. The time budget is 300 ms [I], and results stream in as they arrive, capped at 20 rows [I].
-- Each row shows the path and the matching line. A keystroke, hide or view change kills the running `rg` and drops its late rows. The serial/revision guard that already protects async root search does this (`ui/LauncherWindow.qml`, `services/NativeSearch.qml`); a row from an older query is never activated.
+**Content search, revealed progressively [D, prototyped].**
+- It appears when the query has at least 3 characters and has been still for 150 ms [I], and either fewer than 5 files match by name in bands 0 to 3 or the query contains a space. Counting subsequence hits would hold `frecency` back until `frecenc` (318 hits at `frec` against 2 substring hits), and substring hits open it at `frec`, `omac`, `hypr` and `searchm`.
+- A query with many name matches never reveals content (`copyright`, 63 name hits). Search Files has a Names / Contents dropdown on Ctrl+P that forces content results.
+- It runs `rg --json -F -i -f - --max-filesize 1M` with the query on stdin (§0 rule 6) over the same roots and ignore file. The whole run takes 24 to 25 ms warm and about 150 ms with cold file pages, so rows are collected, sorted by the folder prior, and shown together, capped at 20 rows [I]. The 300 ms budget [I] is the kill timer, not a streaming window.
+- A keystroke, hide or view change kills the running `rg` and drops its late rows. The serial/revision guard that already protects async root search does this (`ui/LauncherWindow.qml`, `services/NativeSearch.qml`), and `tests/formal/SearchOrdering.tla` gains the second source. A row from an older query is never activated.
 - Nothing about contents is cached on disk.
 
 **Where it shows [D].**
@@ -595,6 +601,8 @@ An empty query in Search Files shows "Recent & frequent files", ranked by usage 
 - the first search after a reboot takes longer than 1 s
 - the listing outside large subtrees exceeds 100k files
 - a background refresh takes longer than 200 ms
+
+The helper's own file catalog is the step before the index. Take it when the listing exceeds 50k files, where the regex matcher reaches 7 to 13 ms per keystroke by extrapolation.
 
 ---
 
@@ -896,16 +904,16 @@ Repo layout [D]:
 - **Accept:** every WM command is correct on a dual-monitor Hyprland setup with reserved waybar space, tested with a golden geometry table. Switch Windows focuses across workspaces.
 
 ### Phase 7: File search (§8.6) [D, 2026-11-04]
-- Settle these with throwaway prototypes before building: the band lift and blend weights (against a recorded query set from the developer's own use), the content-reveal gate, the large-subtree threshold, and the first-search time after a reboot.
-- Build, in order: listing and large-subtree detection, the file ranker with usage signals and the folder-tree prior, the Search Files command with preview and actions, the root Files section, progressive content results.
+- Prototyped on 2026-11-04 (`docs/phase7-prototypes/`): the large-subtree threshold, the ranking bands with bounded lift, the content-reveal gate, warm and content-cold search timing, and the matcher's speed in Qt's JS engine. Still open: the listing time with a cold directory cache, which needs one root command the operator runs (`docs/phase7-prototypes/cold.sh`).
+- The PR-by-PR plan with live and perf checks is `docs/phase7-file-search-plan.md`. Build in its order: listing and large-subtree detection, the file ranker and the Search Files view, the preview pane and actions, the root Files section, progressive content results, the Neovim signal.
 - Prove each step with the `verify-omacast` skill (`.agents/skills/verify-omacast/`), and check the search ordering with `verify-search-ordering` whenever the async path changes.
-- **Accept** (on the dev machine: 925k files in `$HOME`, three Unreal Engine trees):
-  - The Unreal and `node_modules` trees are detected as large subtrees without configuration, and a toast offers to ignore them.
-  - A warm background refresh outside large subtrees takes under 50 ms. File-name results update within 50 ms of a keystroke.
+- **Accept** (on the dev machine: 327k files in `$HOME`, `~/Applications/UnrealEngine` and `~/node_modules` as the vendor trees):
+  - The two vendor trees are detected as large untouched subtrees without configuration, a toast offers to ignore them, and `~/Dev` is not flagged.
+  - A warm background refresh outside large subtrees takes under 50 ms (measured 11 to 13 ms). File-name results update within 50 ms of a keystroke in the launcher, with the matcher itself under 10 ms.
   - `oma spec` puts `~/Projects/oma-cast/SPEC.md` first. A file opened twice from omacast outranks an untouched file in the same band, and never outranks an exact file-name match.
-  - A rare word with fewer than 5 name matches shows content rows within 300 ms warm. The next keystroke cancels them, and ↵ never opens a row from the older query.
+  - `frec` shows content rows (fewer than 5 substring name hits) within 300 ms warm, measured under 50 ms. The next keystroke cancels them, and ↵ never opens a row from the older query.
   - No process argv ever holds query text (`tests/privacy.test.js` plus a live `ps` check during a content search).
-  - The first-search time after a reboot is measured and recorded here, deciding whether the index upgrade is needed.
+  - The listing time with a cold directory cache is measured once with `cold.sh` and recorded in §8.6, deciding whether the index upgrade is needed.
 
 ### Phase 8: Parity features
 - Emoji & Symbols, Notes window, Theme Studio, Switch Theme, Confetti, Focus, Screenshots, Calendar, Contacts, Dictionary, Translator (provider), Dictation (whisper.cpp), Typing Practice, `.rayconfig` import/export (§11), Kill Process and Color Picker as first-party extras.

@@ -1,0 +1,12 @@
+Applications/UnrealEngine/
+node_modules/
+.ssh/
+.gnupg/
+.password-store/
+.local/share/keyrings/
+.mozilla/
+.config/chromium/
+.config/google-chrome/
+.config/BraveSoftware/
+.env
+.env.*
