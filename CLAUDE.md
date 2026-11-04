@@ -77,6 +77,9 @@ mise x act@latest -- act push   # run .github/workflows/ci.yml locally in Docker
 tests/smoke.sh               # live checks: doctor, IPC, toggle latency (<100 ms). Shows/hides the launcher, never types.
 omarchy plugin validate .
 
+.agents/skills/verify-omacast/scripts/omacast-verify launch   # live verification: launch|doctor|open|type|key|shot|cleanup (skill: verify-omacast)
+tests/formal/check.sh --safety   # TLA+ check of async search ordering, ~10 s (skill: verify-search-ordering)
+
 bin/omacast install         # link this checkout into ~/.config/omarchy/plugins, enable it, link CLI into ~/.local/bin
 bin/omacast reload          # pick up QML/JS edits (see "Reloading" below)
 bin/omacast dev             # reload on every save (needs inotifywait)
