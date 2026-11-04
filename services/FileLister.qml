@@ -2,9 +2,9 @@ import QtQuick
 import Quickshell.Io
 import "../core/FileIndex.js" as FileIndex
 
-// Holds the file list for file search (SPEC §8.6). Every rg run is a fixed
-// argv of flags, roots and omacast's own ignore files, run from the home dir
-// because rg anchors --ignore-file patterns at the working directory.
+// Holds the file list for file search (SPEC §8.6). Every process runs a fixed
+// argv of constant scripts, flags, roots and omacast's own files, from the home
+// dir because rg anchors --ignore-file patterns at the working directory.
 Item {
   id: lister
 
@@ -22,6 +22,7 @@ Item {
   property int listMs: 0
   property bool refreshing: false
   property double refreshStartedAt: 0
+  property bool ignoreRetried: false
 
   property var subtrees: []
   property double recountedAt: 0
@@ -42,6 +43,9 @@ Item {
   signal message(string level, string text, var metadata)
 
   readonly property string writeScript: 'umask 077; case $1 in create) [[ -e $2 ]] && exec cat >/dev/null; exec cat >"$2" ;; append) exec cat >>"$2" ;; replace) cat >"$2.tmp" && exec mv -f -- "$2.tmp" "$2" ;; esac; exit 2'
+  // rg lists every file, private paths included, when an --ignore-file is
+  // missing or unreadable, and still exits 0. Exit 3 means "restore them first".
+  readonly property string listScript: '[[ -f $2 && -r $2 && -f $3 && -r $3 ]] || exit 3; exec rg --files "${@:4}" --ignore-file "$2" --ignore-file "$3" "$1"'
   readonly property string signalsScript: "zoxide query --list --score 2>/dev/null; fd -H -t f -p '/\\.git/logs/HEAD$' --changed-within 14d --max-depth 8 --exclude node_modules . \"$1\" 2>/dev/null; exit 0"
 
   onReadyChanged: {
@@ -79,7 +83,7 @@ Item {
   // ------------------------------------------------------------- the list
 
   function refresh(roots) {
-    if (lister.refreshing || !lister.started) return false
+    if (lister.refreshing || !lister.started || !lister.recountedAt) return false
     lister.refreshing = true
     lister.refreshStartedAt = Date.now()
     homeRun.root = roots[0]
@@ -97,6 +101,11 @@ Item {
     lister.refreshing = false
     lister.readSignals()
     var runs = configRun.root ? [homeRun, configRun] : [homeRun]
+    if (runs.some(function(run) { return run.exitCode === 3 })) {
+      lister.restoreIgnoreFiles()
+      return
+    }
+    lister.ignoreRetried = false
     var texts = []
     for (var i = 0; i < runs.length; i++) {
       var text = runs[i].stdout.text
@@ -114,13 +123,30 @@ Item {
     lister.message("info", "files: listed " + next.length + " paths in " + lister.listMs + " ms", null)
   }
 
+  // Recreates a missing ignore file from the defaults and the untouched file
+  // from the last recount, then lists once more. A second miss keeps the list.
+  function restoreIgnoreFiles() {
+    if (lister.ignoreRetried) {
+      lister.ignoreRetried = false
+      lister.message("warning", "files: ignore file missing, keeping the previous list", null)
+      return
+    }
+    lister.ignoreRetried = true
+    lister.message("info", "files: an ignore file is missing; recreating it", null)
+    lister.save("create", lister.ignoreFile, FileIndex.defaultIgnoreText(), null)
+    lister.save("create", lister.untouchedFile, FileIndex.ignoreFileText(lister.subtrees, lister.home), function() {
+      ignoreView.reload()
+      lister.refresh(lister.defaultRoots)
+    })
+  }
+
   Process {
     id: homeRun
     property string root: ""
     property int exitCode: -1
     property bool streamed: false
     workingDirectory: lister.home
-    command: ["rg", "--files", "--ignore-file", lister.ignoreFile, "--ignore-file", lister.untouchedFile, homeRun.root]
+    command: ["bash", "-c", lister.listScript, "omacast-files", homeRun.root, lister.ignoreFile, lister.untouchedFile]
     stdout: StdioCollector { onStreamFinished: { homeRun.streamed = true; lister.listed() } }
     onExited: function(exitCode) { homeRun.exitCode = exitCode; lister.listed() }
   }
@@ -131,7 +157,7 @@ Item {
     property int exitCode: -1
     property bool streamed: false
     workingDirectory: lister.home
-    command: ["rg", "--files", "--hidden", "--ignore-file", lister.ignoreFile, configRun.root]
+    command: ["bash", "-c", lister.listScript, "omacast-files", configRun.root, lister.ignoreFile, lister.untouchedFile, "--hidden"]
     stdout: StdioCollector { onStreamFinished: { configRun.streamed = true; lister.listed() } }
     onExited: function(exitCode) { configRun.exitCode = exitCode; lister.listed() }
   }
@@ -230,6 +256,7 @@ Item {
   }
 
   FileView {
+    id: ignoreView
     path: lister.ignoreFileReady ? lister.ignoreFile : ""
     watchChanges: true
     printErrors: false
