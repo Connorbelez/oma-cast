@@ -127,6 +127,8 @@ PanelWindow {
     window.closePopups()
     window.historyIndex = -1
     window.rebuild(true)
+    var fileToast = window.backend.callSync("files.takeToast", null)
+    if (fileToast.ok && fileToast.data) window.showToast(fileToast.data.style, fileToast.data.title, fileToast.data.actions)
     Qt.callLater(function() { keyCatcher.forceActiveFocus() })
   }
 

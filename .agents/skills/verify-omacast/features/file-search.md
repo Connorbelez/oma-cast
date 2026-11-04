@@ -7,7 +7,7 @@ omacast keeps a list of the user's files in memory, built with `rg --files` over
 - `files-list` the in-memory list. It is built when the plugin loads, refreshed 250 ms after an open once it is older than 30 s, and kept as it was when rg fails. Each listing logs `[omacast] [info] files: listed <n> paths in <ms> ms`.
 - `files-ignore-file` `~/.config/omacast/file-search.ignore`, created with the build dirs and the private paths on first start, mode 0600. Patterns with a slash are relative to the home dir.
 - `files-large-subtrees` the daily recount (`files: counted <n> paths, <k> large untouched subtrees in <ms> ms`). It runs at load when the cached result in `~/.cache/omacast/file-search.json` is a day old, and otherwise on hide. Detected trees go into `~/.cache/omacast/file-search-untouched.ignore`, so the list leaves them out whether or not the user accepts the toast.
-- `files-toast` `files.takeToast` returns "Skipping ~/Applications/UnrealEngine (300,136 files, untouched). Add to ignore file?" once per tree, records `fileSearch.askedAt[path]` in `db/settings.json`, and offers it again after 7 days. Its action calls `files.ignore`. The launcher does not call it yet (see Gotchas).
+- `files-toast` `files.takeToast` returns "Skipping ~/Applications/UnrealEngine (300,136 files)" once per tree (the footer shows about 52 characters, so the title carries no question; the Ctrl+T action does), records `fileSearch.askedAt[path]` in `db/settings.json`, and offers it again after 7 days. `prepare()` in `ui/LauncherWindow.qml` calls it on every open and shows the result in the footer for 6 s. Ctrl+T opens the toast's action "Add to Ignore File", which calls `files.ignore`.
 - `files-rpc` `files.list` (count, roots, timing, paths in pages of at most 1,000, optional `under`), `files.refresh` (optional `roots`), `files.largeSubtrees`, `files.ignore` (append one path under the home dir).
 - `files-doctor` `omacast doctor` prints the count, both roots, the ignore file and each large subtree.
 
@@ -15,7 +15,7 @@ omacast keeps a list of the user's files in memory, built with `rg --files` over
 
 - Run `omacast doctor`.
 - Run `omacast call files.list '{"limit":0}'`, `omacast call files.largeSubtrees '{}'`.
-- The toast in the launcher footer, once the launcher calls `files.takeToast` on open.
+- The toast in the launcher footer on the first open after a tree is detected, and Ctrl+T then ↵ to accept it.
 
 ## Driving it with omacast-verify
 
@@ -35,7 +35,7 @@ Preconditions:
 
 ## Gotchas
 
-- The launcher has no Backend-to-toast path. Until `ui/LauncherWindow.qml` `prepare()` calls `files.takeToast` and passes the result to `showToast`, the toast never shows on screen, and ↵ on it means Ctrl+T then ↵ through the toast-action panel.
+- ↵ while the toast shows activates the selected row, not the toast. Accepting the toast is Ctrl+T then ↵, like every toast action in the launcher. The toast leaves the footer after 6 s and does not return for 7 days, because taking it records the ask.
 - `files.takeToast` records the ask. Calling it from a test hides the toast from the next real open for 7 days, so restore `fileSearch.askedAt`.
 - `qs ipc` drops replies over about 200 KB. `files.list` returns 100 paths by default and at most 1,000 per call.
 - rg anchors `--ignore-file` patterns at its working directory. Every run starts in the home dir, and a hand-run check must too (`cd ~`).

@@ -149,7 +149,7 @@ function toastFor(tree, home, ignoreMethod) {
   var shown = displayPath(tree.path, home)
   return {
     style: "success",
-    title: "Skipping " + shown + " (" + groupDigits(tree.count) + " files, untouched). Add to ignore file?",
+    title: "Skipping " + shown + " (" + groupDigits(tree.count) + " files)",
     actions: [{
       id: "add-to-ignore-file", title: "Add to Ignore File", done: "Added " + shown + " to the ignore file",
       call: { method: ignoreMethod, data: { path: tree.path } }

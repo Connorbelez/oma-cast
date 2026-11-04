@@ -112,7 +112,7 @@ test("treeToAsk skips ignored trees and asks again after seven days", () => {
 test("toastFor names the tree with its file count and offers the ignore call", () => {
   assert.deepEqual(FileIndex.toastFor({ path: `${HOME}/Applications/UnrealEngine`, count: 300136 }, HOME, "files.ignore"), {
     style: "success",
-    title: "Skipping ~/Applications/UnrealEngine (300,136 files, untouched). Add to ignore file?",
+    title: "Skipping ~/Applications/UnrealEngine (300,136 files)",
     actions: [{
       id: "add-to-ignore-file", title: "Add to Ignore File", done: "Added ~/Applications/UnrealEngine to the ignore file",
       call: { method: "files.ignore", data: { path: `${HOME}/Applications/UnrealEngine` } }
