@@ -50,44 +50,58 @@ function parseSignals(text) {
   return dirs
 }
 
-// Counts files per directory first and only then adds each directory's count
-// to its ancestors, so the ancestor walk runs once per directory (48k on the
-// dev home), not once per file (327k). The root itself is never flagged: a
-// home with no signals yet would otherwise drop every file.
-function largeSubtrees(paths, signals, threshold, root) {
-  var direct = Object.create(null)
-  for (var i = 0; i < paths.length; i++) {
-    var dir = paths[i].slice(0, paths[i].lastIndexOf("/"))
-    direct[dir] = (direct[dir] || 0) + 1
+// The daily recount, run as one process outside the shell: rg lists the
+// whole home dir and awk keeps a file count per directory, printing
+// "<count>\t<dir>" for the root and each directory over the threshold. Each
+// directory adds its own files to its ancestors once, which beats walking the
+// ancestors of every file (48k directories against 327k files on the dev home).
+var RECOUNT_SCRIPT = 'set -o pipefail; rg --files "$1" | LC_ALL=C root="$1" awk -F/ -v threshold="$3" "$2"'
+
+var COUNT_PROGRAM = [
+  'BEGIN { r = ENVIRON["root"]; k = split(r, part, "/"); prefix = r "/" }',
+  '{ n[substr($0, 1, length($0) - length($NF) - 1)]++ }',
+  'END {',
+  '  print NR "\\t" r',
+  '  for (d in n) {',
+  '    if (index(d "/", prefix) != 1) continue',
+  '    m = split(d, part, "/"); p = r',
+  '    for (i = k + 1; i <= m; i++) { p = p "/" part[i]; c[p] += n[d] }',
+  '  }',
+  '  for (p in c) if (c[p] > threshold) print c[p] "\\t" p',
+  '}'
+].join("\n")
+
+function parseCounts(text) {
+  var lines = String(text || "").split("\n")
+  var counts = {}
+  for (var i = 0; i < lines.length; i++) {
+    var tab = lines[i].indexOf("\t")
+    if (tab > 0) counts[lines[i].slice(tab + 1)] = Number(lines[i].slice(0, tab))
   }
-  var counts = Object.create(null)
-  var children = Object.create(null)
-  var prefix = root + "/"
-  for (var start in direct) {
-    var n = direct[start]
-    var d = start
-    while (d.length > prefix.length && d.indexOf(prefix) === 0) {
-      var parent = d.slice(0, d.lastIndexOf("/"))
-      if (counts[d] === undefined) {
-        counts[d] = 0
-        if (children[parent] === undefined) children[parent] = []
-        children[parent].push(d)
-      }
-      counts[d] += n
-      d = parent
-    }
+  return counts
+}
+
+// The topmost directories over the threshold with no signal inside, walking
+// down from the root as docs/phase7-prototypes/detect.py does. The root itself
+// is never flagged: a home with no signals yet would otherwise drop every file.
+function largeSubtrees(counts, signals, threshold, root) {
+  var children = {}
+  for (var dir in counts) {
+    if (dir.indexOf(root + "/") !== 0) continue
+    var parent = dir.slice(0, dir.lastIndexOf("/"))
+    if (!children[parent]) children[parent] = []
+    children[parent].push(dir)
   }
   function touched(d) {
-    for (var s = 0; s < signals.length; s++) if (signals[s] === d || signals[s].indexOf(d + "/") === 0) return true
-    return false
+    return signals.some(function(s) { return s === d || s.indexOf(d + "/") === 0 })
   }
   var found = []
   function walk(d) {
     var list = (children[d] || []).slice().sort()
-    for (var c = 0; c < list.length; c++) {
-      if (counts[list[c]] <= threshold) continue
-      if (touched(list[c])) walk(list[c])
-      else found.push({ path: list[c], count: counts[list[c]] })
+    for (var i = 0; i < list.length; i++) {
+      if (!(counts[list[i]] > threshold)) continue
+      if (touched(list[i])) walk(list[i])
+      else found.push({ path: list[i], count: counts[list[i]] })
     }
   }
   walk(root)
@@ -157,34 +171,13 @@ function toastFor(tree, home, ignoreMethod) {
   }
 }
 
-// Strings over 2^24 characters arrive undefined through
-// WorkerScript.sendMessage, so a full listing travels as newline-aligned chunks.
-function chunks(text, size) {
-  var out = []
-  var start = 0
-  while (start < text.length) {
-    var end = start + size >= text.length ? text.length : text.lastIndexOf("\n", start + size) + 1
-    if (end <= start) end = text.indexOf("\n", start) + 1 || text.length
-    out.push(text.slice(start, end))
-    start = end
-  }
-  return out
-}
-
 if (typeof module !== "undefined") {
   module.exports = {
     DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, REFRESH_AFTER_MS: REFRESH_AFTER_MS,
     DEFAULT_IGNORES: DEFAULT_IGNORES, PRIVATE_PATHS: PRIVATE_PATHS, defaultIgnoreText: defaultIgnoreText,
-    parseList: parseList, parseSignals: parseSignals, largeSubtrees: largeSubtrees, ignores: ignores,
+    RECOUNT_SCRIPT: RECOUNT_SCRIPT, COUNT_PROGRAM: COUNT_PROGRAM,
+    parseList: parseList, parseSignals: parseSignals, parseCounts: parseCounts, largeSubtrees: largeSubtrees, ignores: ignores,
     ignoreLine: ignoreLine, ignoreFileText: ignoreFileText, displayPath: displayPath, groupDigits: groupDigits,
-    treeToAsk: treeToAsk, toastFor: toastFor, chunks: chunks
-  }
-}
-
-if (typeof WorkerScript !== "undefined" && typeof WorkerScript.sendMessage === "function") {
-  WorkerScript.onMessage = function(message) {
-    var paths = []
-    for (var i = 0; i < message.chunks.length; i++) paths = paths.concat(message.chunks[i].split("\n"))
-    WorkerScript.sendMessage({ id: message.id, files: paths.length, subtrees: largeSubtrees(paths, message.signals, message.threshold, message.root) })
+    treeToAsk: treeToAsk, toastFor: toastFor
   }
 }

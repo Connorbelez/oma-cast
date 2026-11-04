@@ -1,5 +1,4 @@
 import QtQuick
-import QtQml.WorkerScript
 import Quickshell.Io
 import "../core/FileIndex.js" as FileIndex
 
@@ -30,7 +29,6 @@ Item {
   property bool recounting: false
   property bool recountDue: false
   property double recountStartedAt: 0
-  property var recountText: null
 
   property var signals: []
   property double signalsAt: 0
@@ -74,8 +72,6 @@ Item {
     onTriggered: lister.refresh(lister.defaultRoots)
   }
 
-  // The daily recount moves a 30 MB listing to the worker, so it waits for
-  // the launcher to close instead of competing with its first frames.
   function hidden() {
     if (lister.started && (lister.recountDue || Date.now() - lister.recountedAt >= FileIndex.RECOUNT_MS)) lister.recount()
   }
@@ -153,7 +149,7 @@ Item {
       return lister.signals.some(function(s) { return s === t.path || s.indexOf(t.path + "/") === 0 })
     })
     if (touched) lister.recountDue = true
-    lister.count()
+    lister.counted()
   }
 
   Process {
@@ -174,43 +170,29 @@ Item {
     lister.recounting = true
     lister.recountDue = false
     lister.recountStartedAt = Date.now()
-    lister.recountText = null
-    recountLoader.active = true
+    recountRun.running = true
     lister.readSignals()
   }
 
-  function recountListed(exitCode, text) {
-    Qt.callLater(function() { recountLoader.active = false })
-    if (exitCode >= 2 && !text) {
+  function counted() {
+    if (!lister.recounting || !recountRun.exited || !recountRun.streamed || lister.signalsAt < lister.recountStartedAt) return
+    if (recountRun.exitStatus !== 0 || recountRun.code !== 0) {
       lister.recounting = false
-      lister.message("warning", "files: rg exited " + exitCode + " for " + lister.home + "; keeping the previous large subtrees", null)
+      lister.message("warning", "files: recount exited " + (recountRun.exitStatus ? "abnormally" : recountRun.code) + " for " + lister.home + "; keeping the previous large subtrees", null)
       return
     }
-    lister.recountText = text
-    lister.count()
-  }
-
-  function count() {
-    if (!lister.recounting || lister.recountText === null || !counter.ready || lister.signalsAt < lister.recountStartedAt) return
-    counter.sendMessage({
-      id: lister.recountStartedAt, chunks: FileIndex.chunks(lister.recountText, 8000000),
-      signals: lister.signals, threshold: FileIndex.DEFAULT_THRESHOLD, root: lister.home
-    })
-    lister.recountText = null
-  }
-
-  function counted(reply) {
-    if (reply.id !== lister.recountStartedAt) return
-    var before = JSON.stringify(lister.subtrees)
-    lister.subtrees = reply.subtrees
+    var counts = FileIndex.parseCounts(recountOut.text)
+    var found = FileIndex.largeSubtrees(counts, lister.signals, FileIndex.DEFAULT_THRESHOLD, lister.home)
+    var changed = JSON.stringify(found) !== JSON.stringify(lister.subtrees)
+    lister.subtrees = found
     lister.recountedAt = Date.now()
-    lister.recountFiles = reply.files
-    lister.message("info", "files: counted " + reply.files + " paths, " + reply.subtrees.length + " large untouched subtrees in "
+    lister.recountFiles = counts[lister.home] || 0
+    lister.message("info", "files: counted " + lister.recountFiles + " paths, " + found.length + " large untouched subtrees in "
       + (lister.recountedAt - lister.recountStartedAt) + " ms", null)
-    lister.save("replace", lister.stateFile, JSON.stringify({ recountedAt: lister.recountedAt, files: reply.files, subtrees: reply.subtrees }) + "\n", null)
-    lister.save("replace", lister.untouchedFile, FileIndex.ignoreFileText(reply.subtrees, lister.home), function() {
+    lister.save("replace", lister.stateFile, JSON.stringify({ recountedAt: lister.recountedAt, files: lister.recountFiles, subtrees: found }) + "\n", null)
+    lister.save("replace", lister.untouchedFile, FileIndex.ignoreFileText(found, lister.home), function() {
       lister.recounting = false
-      if (before !== JSON.stringify(reply.subtrees) || !lister.listedAt) lister.refreshSoon()
+      if (changed || !lister.listedAt) lister.refreshSoon()
     })
   }
 
@@ -218,27 +200,21 @@ Item {
     if (!lister.refresh(lister.defaultRoots)) lister.listedAt = 0
   }
 
-  WorkerScript {
-    id: counter
-    source: Qt.resolvedUrl("../core/FileIndex.js")
-    onMessage: function(reply) { lister.counted(reply) }
-    onReadyChanged: lister.count()
-  }
-
-  Loader {
-    id: recountLoader
-    active: false
-    sourceComponent: Process {
-      id: recountRun
-      property bool exited: false
-      property int code: -1
-      property bool streamed: false
-      running: true
-      workingDirectory: lister.home
-      command: ["rg", "--files", lister.home]
-      stdout: StdioCollector { id: recountOut; onStreamFinished: { recountRun.streamed = true; recountRun.settle() } }
-      onExited: function(exitCode) { recountRun.code = exitCode; recountRun.exited = true; recountRun.settle() }
-      function settle() { if (recountRun.exited && recountRun.streamed) lister.recountListed(recountRun.code, recountOut.text) }
+  Process {
+    id: recountRun
+    property bool exited: false
+    property bool streamed: false
+    property int code: -1
+    property int exitStatus: -1
+    workingDirectory: lister.home
+    command: ["bash", "-c", FileIndex.RECOUNT_SCRIPT, "omacast-recount", lister.home, FileIndex.COUNT_PROGRAM, String(FileIndex.DEFAULT_THRESHOLD)]
+    stdout: StdioCollector { id: recountOut; onStreamFinished: { recountRun.streamed = true; lister.counted() } }
+    onStarted: { recountRun.exited = false; recountRun.streamed = false }
+    onExited: function(exitCode, exitStatus) {
+      recountRun.code = exitCode
+      recountRun.exitStatus = exitStatus
+      recountRun.exited = true
+      lister.counted()
     }
   }
 

@@ -151,6 +151,9 @@ const FILE_LISTER_ARGS = {
   "lister.untouchedFile": "the large untouched subtrees, as ignore patterns",
   "lister.signalsScript": "a constant script",
   "lister.writeScript": "a constant script",
+  "FileIndex.RECOUNT_SCRIPT": "a constant script",
+  "FileIndex.COUNT_PROGRAM": "a constant awk program",
+  "String(FileIndex.DEFAULT_THRESHOLD)": "a constant number",
   "writer.mode": "create, append or replace",
   "writer.path": "one of omacast's own files"
 }
