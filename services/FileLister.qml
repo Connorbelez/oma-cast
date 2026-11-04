@@ -21,6 +21,7 @@ Item {
   property double listedAt: 0
   property int listMs: 0
   property bool refreshing: false
+  property bool dirty: false
   property double refreshStartedAt: 0
   property bool ignoreRetried: false
 
@@ -82,8 +83,14 @@ Item {
 
   // ------------------------------------------------------------- the list
 
+  // A request that cannot start now marks the list dirty, and the refresh
+  // that finishes next starts one more.
   function refresh(roots) {
-    if (lister.refreshing || !lister.started || !lister.recountedAt || homeRun.running || configRun.running) return false
+    if (lister.refreshing || !lister.started || !lister.recountedAt || homeRun.running || configRun.running) {
+      lister.dirty = true
+      return false
+    }
+    lister.dirty = false
     lister.refreshing = true
     lister.refreshStartedAt = Date.now()
     homeRun.root = roots[0]
@@ -113,14 +120,14 @@ Item {
     lister.ignoreRetried = false
     if (outcome.warnings) {
       outcome.warnings.forEach(function(text) { lister.message("warning", text, null) })
-      return
+    } else {
+      lister.rows = outcome.rows
+      lister.roots = runs.map(function(run) { return run.root })
+      lister.listedAt = Date.now()
+      lister.listMs = lister.listedAt - lister.refreshStartedAt
+      lister.message("info", "files: listed " + outcome.rows.length + " paths in " + lister.listMs + " ms", null)
     }
-    var next = outcome.rows
-    lister.rows = next
-    lister.roots = runs.map(function(run) { return run.root })
-    lister.listedAt = Date.now()
-    lister.listMs = lister.listedAt - lister.refreshStartedAt
-    lister.message("info", "files: listed " + next.length + " paths in " + lister.listMs + " ms", null)
+    if (lister.dirty) lister.refresh(lister.defaultRoots)
   }
 
   // Recreates a missing ignore file from the defaults and the untouched file
@@ -237,12 +244,8 @@ Item {
     lister.save("replace", lister.untouchedFile, FileIndex.ignoreFileText(found, lister.home), function() {
       recountWatchdog.stop()
       lister.recounting = false
-      if (changed || !lister.listedAt) lister.refreshSoon()
+      if (changed || !lister.listedAt || lister.dirty) lister.refresh(lister.defaultRoots)
     })
-  }
-
-  function refreshSoon() {
-    if (!lister.refresh(lister.defaultRoots)) lister.listedAt = 0
   }
 
   Process {
@@ -294,7 +297,7 @@ Item {
     var line = FileIndex.ignoreLine(lister.home, path)
     var gap = lister.ignoreText && lister.ignoreText.charAt(lister.ignoreText.length - 1) !== "\n" ? "\n" : ""
     lister.ignoreText += gap + line + "\n"
-    lister.save("append", lister.ignoreFile, gap + line + "\n", function(ok) { if (ok) lister.refreshSoon() })
+    lister.save("append", lister.ignoreFile, gap + line + "\n", function(ok) { if (ok) lister.refresh(lister.defaultRoots) })
     return { added: true, line: line }
   }
 
@@ -305,8 +308,9 @@ Item {
     printErrors: false
     onFileChanged: reload()
     onLoaded: {
-      if (lister.ignoreText !== text()) lister.listedAt = 0
+      var changed = lister.ignoreText !== text()
       lister.ignoreText = text()
+      if (changed) lister.refresh(lister.defaultRoots)
     }
   }
 
