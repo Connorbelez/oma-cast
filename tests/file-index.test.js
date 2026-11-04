@@ -150,11 +150,41 @@ test("ignores matches plain names anywhere and slashed patterns from the root", 
   assert.equal(FileIndex.ignores("# node_modules/\n!Dev/\n", HOME, `${HOME}/node_modules`), false)
 })
 
-test("ignoreLine anchors the tree to the root and escapes glob characters", () => {
+test("ignoreLine anchors the tree to the root and escapes every glob character rg reads", () => {
   assert.equal(FileIndex.ignoreLine(HOME, `${HOME}/Applications/UnrealEngine`), "/Applications/UnrealEngine/")
-  assert.equal(FileIndex.ignoreLine(HOME, `${HOME}/a*b/[x]?`), "/a\\*b/\\[x]\\?/")
+  assert.equal(FileIndex.ignoreLine(HOME, `${HOME}/Games/Foo [GOG]`), "/Games/Foo \\[GOG\\]/")
+  assert.equal(FileIndex.ignoreLine(HOME, `${HOME}/a*b/[x]?`), "/a\\*b/\\[x\\]\\?/")
+  assert.equal(FileIndex.ignoreLine(HOME, `${HOME}/br{a,b}ce`), "/br\\{a,b\\}ce/")
+  assert.equal(FileIndex.ignoreLine(HOME, `${HOME}/back\\slash`), "/back\\\\slash/")
+  assert.equal(FileIndex.ignoreLine(HOME, `${HOME}/trail `), "/trail /")
   assert.equal(FileIndex.ignoreFileText([{ path: `${HOME}/x`, count: 9 }, { path: `${HOME}/y z`, count: 7 }], HOME), "/x/\n/y z/\n")
   assert.equal(FileIndex.ignoreFileText([], HOME), "")
+})
+
+const GLOB_NAMES = ["Games/Foo [GOG]", "a[b", "x]y", "q?x", "st*r", "trail ", "back\\slash", "br{a,b}ce", "!bang", "#hash", "Dev/a b/c"]
+
+test("ignores reads back every line ignoreLine writes, and nothing next to it", () => {
+  for (const name of GLOB_NAMES) {
+    const line = FileIndex.ignoreLine(HOME, `${HOME}/${name}`) + "\n"
+    assert.equal(FileIndex.ignores(line, HOME, `${HOME}/${name}`), true, line)
+    assert.equal(FileIndex.ignores(line, HOME, `${HOME}/${name}/inner`), true, line)
+    assert.equal(FileIndex.ignores(line, HOME, `${HOME}/${name}x`), false, line)
+  }
+  assert.equal(FileIndex.ignores(FileIndex.ignoreLine(HOME, `${HOME}/q?x`), HOME, `${HOME}/qax`), false)
+  assert.equal(FileIndex.ignores(FileIndex.ignoreLine(HOME, `${HOME}/st*r`), HOME, `${HOME}/stuffr`), false)
+  assert.equal(FileIndex.ignores(FileIndex.ignoreLine(HOME, `${HOME}/Games/Foo [GOG]`), HOME, `${HOME}/Games/Foo G`), false)
+})
+
+test("ignores never throws: a line rg rejects matches nothing, and the lines around it still count", () => {
+  const text = "/b{oops/\nx}y\nfoo\\\n/Games/Foo [GOG]/\n/a[b/\n{c,{d}}/\n/Applications/UnrealEngine/\n"
+  assert.equal(FileIndex.ignores(text, HOME, `${HOME}/b{oops`), false)
+  assert.equal(FileIndex.ignores(text, HOME, `${HOME}/Games/Foo G`), true)
+  assert.equal(FileIndex.ignores(text, HOME, `${HOME}/Games/Foo [GOG]`), false)
+  assert.equal(FileIndex.ignores(text, HOME, `${HOME}/a[b`), true)
+  assert.equal(FileIndex.ignores(text, HOME, `${HOME}/x/d`), true)
+  assert.equal(FileIndex.ignores(text, HOME, `${HOME}/Applications/UnrealEngine`), true)
+  assert.deepEqual(FileIndex.badIgnoreLines(text), ["/b{oops/", "x}y", "foo\\"])
+  assert.deepEqual(FileIndex.badIgnoreLines(FileIndex.defaultIgnoreText()), [])
 })
 
 test("treeToAsk skips ignored trees and asks again after seven days", () => {
@@ -202,4 +232,20 @@ test("rg honours the default ignore file and an appended tree, run from the home
     `${home}/Documents/plan.md`, `${home}/Other/Applications/UnrealEngine/keep.txt`
   ])
   assert.deepEqual(list(["--files", "--hidden", "--ignore-file", ignore, home + "/.config"]), [`${home}/.config/hypr/hyprland.lua`])
+})
+
+test("rg leaves out every tree ignoreLine writes, glob characters and all", { skip: !hasRg && "rg is not installed" }, (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "omacast-globs-"))
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }))
+  const decoys = ["qax", "stuffr", "Games/Foo G", "brace"]
+  for (const name of [...GLOB_NAMES, ...decoys]) {
+    fs.mkdirSync(path.join(home, name), { recursive: true })
+    fs.writeFileSync(path.join(home, name, "f"), "x")
+  }
+  const ignore = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "omacast-globs-ignore-")), "file-search.ignore")
+  t.after(() => fs.rmSync(path.dirname(ignore), { recursive: true, force: true }))
+  fs.writeFileSync(ignore, FileIndex.ignoreFileText(GLOB_NAMES.map((n) => ({ path: `${home}/${n}`, count: 1 })), home))
+  const r = spawnSync("rg", ["--files", "--ignore-file", ignore, home], { cwd: home, encoding: "utf8" })
+  assert.equal(r.stderr, "")
+  assert.deepEqual(r.stdout.split("\n").filter(Boolean).sort(), decoys.map((d) => `${home}/${d}/f`).sort())
 })
