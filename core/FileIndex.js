@@ -37,11 +37,9 @@ function parseList(text) {
   return rows
 }
 
-// A refresh's finished rg runs ({ root, exitCode, exitStatus, text }) as
-// { rows } to swap in, { missing: true } when the list script found an ignore
-// file missing (exit 3), or { warnings } to keep the previous list. rg exits 2
-// for any error, and exitStatus 1 means a signal ended the run, so either
-// leaves a list that may be cut short.
+// Exit 3 is the list script's missing ignore file. rg exits 2 for any error,
+// and exitStatus 1 means a signal ended the run, so either may leave a list
+// cut short.
 function listOutcome(runs) {
   if (runs.some(function(r) { return r.exitStatus === 0 && r.exitCode === 3 })) return { missing: true }
   var failed = runs.filter(function(r) { return r.exitStatus !== 0 || r.exitCode !== 0 })
@@ -99,7 +97,7 @@ function parseCounts(text) {
 
 // The topmost directories over the threshold with no signal inside, walking
 // down from the root as docs/phase7-prototypes/detect.py does. The root itself
-// is never flagged: a home with no signals yet would otherwise drop every file.
+// is never flagged, or a home with no signals yet would drop every file.
 function largeSubtrees(counts, signals, threshold, root) {
   var children = {}
   for (var dir in counts) {
@@ -199,7 +197,6 @@ function ignorePatterns(ignoreText) {
   return { patterns: patterns, bad: bad }
 }
 
-// Whether a line in the ignore file already covers the directory.
 function ignores(ignoreText, root, dir) {
   var rel = dir.slice(root.length + 1)
   return ignorePatterns(ignoreText).patterns.some(function(p) { return p.test(rel) })
