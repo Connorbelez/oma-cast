@@ -83,7 +83,7 @@ Item {
   // ------------------------------------------------------------- the list
 
   function refresh(roots) {
-    if (lister.refreshing || !lister.started || !lister.recountedAt) return false
+    if (lister.refreshing || !lister.started || !lister.recountedAt || homeRun.running || configRun.running) return false
     lister.refreshing = true
     lister.refreshStartedAt = Date.now()
     homeRun.root = roots[0]
@@ -91,6 +91,7 @@ Item {
     for (var run of [homeRun, configRun]) { run.exited = false; run.streamed = false }
     homeRun.running = true
     if (configRun.root) configRun.running = true
+    refreshWatchdog.restart()
     return true
   }
 
@@ -98,6 +99,7 @@ Item {
 
   function listed() {
     if (!lister.refreshing || !lister.runDone(homeRun) || (configRun.root && !lister.runDone(configRun))) return
+    refreshWatchdog.stop()
     lister.refreshing = false
     lister.readSignals()
     var runs = (configRun.root ? [homeRun, configRun] : [homeRun]).map(function(run) {
@@ -204,17 +206,21 @@ Item {
   // ------------------------------------------- large untouched subtrees
 
   function recount() {
-    if (lister.recounting) return
+    if (lister.recounting || recountRun.running) return
     lister.recounting = true
     lister.recountDue = false
     lister.recountStartedAt = Date.now()
+    recountRun.exited = false
+    recountRun.streamed = false
     recountRun.running = true
+    recountWatchdog.restart()
     lister.readSignals()
   }
 
   function counted() {
     if (!lister.recounting || !recountRun.exited || !recountRun.streamed || lister.signalsAt < lister.recountStartedAt) return
     if (recountRun.exitStatus !== 0 || recountRun.code !== 0) {
+      recountWatchdog.stop()
       lister.recounting = false
       lister.message("warning", "files: recount exited " + (recountRun.exitStatus ? "abnormally" : recountRun.code) + " for " + lister.home + "; keeping the previous large subtrees", null)
       return
@@ -229,6 +235,7 @@ Item {
       + (lister.recountedAt - lister.recountStartedAt) + " ms", null)
     lister.save("replace", lister.stateFile, JSON.stringify({ recountedAt: lister.recountedAt, files: lister.recountFiles, subtrees: found }) + "\n", null)
     lister.save("replace", lister.untouchedFile, FileIndex.ignoreFileText(found, lister.home), function() {
+      recountWatchdog.stop()
       lister.recounting = false
       if (changed || !lister.listedAt) lister.refreshSoon()
     })
@@ -247,12 +254,36 @@ Item {
     workingDirectory: lister.home
     command: ["bash", "-c", FileIndex.RECOUNT_SCRIPT, "omacast-recount", lister.home, FileIndex.COUNT_PROGRAM, String(FileIndex.DEFAULT_THRESHOLD)]
     stdout: StdioCollector { id: recountOut; onStreamFinished: { recountRun.streamed = true; lister.counted() } }
-    onStarted: { recountRun.exited = false; recountRun.streamed = false }
     onExited: function(exitCode, exitStatus) {
       recountRun.code = exitCode
       recountRun.exitStatus = exitStatus
       recountRun.exited = true
       lister.counted()
+    }
+  }
+
+  // Quickshell emits no exited for a process that fails to start, and rg can
+  // block on a hung mount, so each stage gives up and keeps its last result.
+  function giveUp(stage, runs) {
+    runs.forEach(function(run) { if (run.running) run.signal(9) })
+    lister.message("warning", "files: " + stage + " timed out", null)
+  }
+
+  Timer {
+    id: refreshWatchdog
+    interval: 15000
+    onTriggered: {
+      lister.refreshing = false
+      lister.giveUp("refresh", [homeRun, configRun])
+    }
+  }
+
+  Timer {
+    id: recountWatchdog
+    interval: 60000
+    onTriggered: {
+      lister.recounting = false
+      lister.giveUp("recount", [recountRun, signalsRun])
     }
   }
 
