@@ -37,10 +37,11 @@ function parseList(text) {
   return rows
 }
 
-// Exit 3 is the list script's missing ignore file. rg exits 2 for any error,
-// and exitStatus 1 means a signal ended the run, so either may leave a list
-// cut short.
+// Exit 3 is the list script's missing ignore file and 124 is timeout's. rg
+// exits 2 for any error, and exitStatus 1 means a signal ended the run, so
+// either may leave a list cut short.
 function listOutcome(runs) {
+  if (runs.some(function(r) { return r.exitStatus === 0 && r.exitCode === 124 })) return { warnings: ["files: refresh timed out"] }
   if (runs.some(function(r) { return r.exitStatus === 0 && r.exitCode === 3 })) return { missing: true }
   var warnings = []
   var failed = false

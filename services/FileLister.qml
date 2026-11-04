@@ -162,7 +162,7 @@ Item {
     property int code: -1
     property int exitStatus: -1
     workingDirectory: lister.home
-    command: ["bash", "-c", lister.listScript, "omacast-files", homeRun.root, lister.ignoreFile, lister.untouchedFile]
+    command: ["timeout", "-k", "2", "15", "bash", "-c", lister.listScript, "omacast-files", homeRun.root, lister.ignoreFile, lister.untouchedFile]
     stdout: StdioCollector { onStreamFinished: { homeRun.streamed = true; lister.listed() } }
     onExited: function(exitCode, exitStatus) {
       homeRun.code = exitCode
@@ -180,7 +180,7 @@ Item {
     property int code: -1
     property int exitStatus: -1
     workingDirectory: lister.home
-    command: ["bash", "-c", lister.listScript, "omacast-files", configRun.root, lister.ignoreFile, lister.untouchedFile, "--hidden"]
+    command: ["timeout", "-k", "2", "15", "bash", "-c", lister.listScript, "omacast-files", configRun.root, lister.ignoreFile, lister.untouchedFile, "--hidden"]
     stdout: StdioCollector { onStreamFinished: { configRun.streamed = true; lister.listed() } }
     onExited: function(exitCode, exitStatus) {
       configRun.code = exitCode
@@ -196,8 +196,9 @@ Item {
     if (!signalsRun.running) signalsRun.running = true
   }
 
-  function signalsRead(text) {
-    lister.signals = FileIndex.parseSignals(text)
+  function signalsRead(exitCode, exitStatus, text) {
+    if (exitStatus === 0 && exitCode === 0) lister.signals = FileIndex.parseSignals(text)
+    else lister.message("warning", "files: signals " + (exitStatus === 0 && exitCode === 124 ? "timed out" : "exited abnormally") + "; keeping the previous signals", null)
     lister.signalsAt = Date.now()
     var touched = lister.subtrees.some(function(t) {
       return lister.signals.some(function(s) { return s === t.path || s.indexOf(t.path + "/") === 0 })
@@ -210,12 +211,19 @@ Item {
     id: signalsRun
     property bool exited: false
     property bool streamed: false
+    property int code: -1
+    property int exitStatus: -1
     workingDirectory: lister.home
-    command: ["bash", "-c", lister.signalsScript, "omacast-signals", lister.home]
+    command: ["timeout", "-k", "2", "15", "bash", "-c", lister.signalsScript, "omacast-signals", lister.home]
     stdout: StdioCollector { id: signalsOut; onStreamFinished: { signalsRun.streamed = true; signalsRun.settle() } }
     onStarted: { signalsRun.exited = false; signalsRun.streamed = false }
-    onExited: { signalsRun.exited = true; signalsRun.settle() }
-    function settle() { if (signalsRun.exited && signalsRun.streamed) lister.signalsRead(signalsOut.text) }
+    onExited: function(exitCode, exitStatus) {
+      signalsRun.code = exitCode
+      signalsRun.exitStatus = exitStatus
+      signalsRun.exited = true
+      signalsRun.settle()
+    }
+    function settle() { if (signalsRun.exited && signalsRun.streamed) lister.signalsRead(signalsRun.code, signalsRun.exitStatus, signalsOut.text) }
   }
 
   // ------------------------------------------- large untouched subtrees
@@ -264,7 +272,7 @@ Item {
     property int code: -1
     property int exitStatus: -1
     workingDirectory: lister.home
-    command: ["bash", "-c", FileIndex.RECOUNT_SCRIPT, "omacast-recount", lister.home, FileIndex.COUNT_PROGRAM, String(FileIndex.DEFAULT_THRESHOLD)]
+    command: ["timeout", "-k", "2", "60", "bash", "-c", FileIndex.RECOUNT_SCRIPT, "omacast-recount", lister.home, FileIndex.COUNT_PROGRAM, String(FileIndex.DEFAULT_THRESHOLD)]
     stdout: StdioCollector { id: recountOut; onStreamFinished: { recountRun.streamed = true; lister.counted() } }
     onExited: function(exitCode, exitStatus) {
       recountRun.code = exitCode
@@ -274,16 +282,18 @@ Item {
     }
   }
 
-  // Quickshell emits no exited for a process that fails to start, and rg can
-  // block on a hung mount, so each stage gives up and keeps its last result.
+  // timeout ends each stage's whole process group and exits 124. These
+  // watchdogs cover a process that never started, which Quickshell reports
+  // with no exited, and a timeout that is itself stuck; SIGTERM to timeout
+  // passes on to the group.
   function giveUp(stage, runs) {
-    runs.forEach(function(run) { if (run.running) run.signal(9) })
+    runs.forEach(function(run) { if (run.running) run.signal(15) })
     lister.message("warning", "files: " + stage + " timed out", null)
   }
 
   Timer {
     id: refreshWatchdog
-    interval: 15000
+    interval: 20000
     onTriggered: {
       lister.refreshing = false
       lister.giveUp("refresh", [homeRun, configRun])
@@ -292,7 +302,7 @@ Item {
 
   Timer {
     id: recountWatchdog
-    interval: 60000
+    interval: 65000
     onTriggered: {
       lister.recounting = false
       lister.giveUp("recount", [recountRun, signalsRun])

@@ -271,10 +271,15 @@ test("the usage-signal script passes only fixed flags and the home dir to zoxide
 })
 
 // rg anchors --ignore-file patterns at its working directory, and a path
-// fd prints relative to some other directory never matches a tree.
-test("every process that walks the home dir starts in it", () => {
+// fd prints relative to some other directory never matches a tree. A
+// FIFO or a hung mount blocks rg and fd, and only timeout's process group
+// reaches the pipeline and fd behind bash.
+test("every process that walks the home dir starts in it, under timeout", () => {
   const blocks = fileListerSource().split("\n  Process {").slice(1).map((b) => b.split("\n  }")[0])
   const walkers = blocks.filter((b) => /command:.*(listScript|signalsScript|RECOUNT_SCRIPT)/.test(b))
   assert.equal(walkers.length, 4)
-  for (const b of walkers) assert.match(b, /\n    workingDirectory: lister\.home\n/, b.split("\n")[1])
+  for (const b of walkers) {
+    assert.match(b, /\n    workingDirectory: lister\.home\n/, b.split("\n")[1])
+    assert.match(b, /\n    command: \["timeout", "-k", "2", "(15|60)", "bash", "-c", /, b.split("\n")[1])
+  }
 })

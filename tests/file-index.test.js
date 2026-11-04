@@ -136,6 +136,7 @@ test("listOutcome swaps in the list when every run exited normally with 0, or wi
     rows: [{ path: `${HOME}/a`, name: "a", dir: HOME }],
     warnings: [`files: rg exited 2 for ${HOME}; listed what it could read`]
   })
+  assert.deepEqual(FileIndex.listOutcome([home, run(`${HOME}/.config`, 124, 0, `${HOME}/.config/b\n`)]), { warnings: ["files: refresh timed out"] })
   assert.deepEqual(FileIndex.listOutcome([run(HOME, 3, 0, ""), home]), { missing: true })
   assert.deepEqual(FileIndex.listOutcome([run(HOME, 3, 1, ""), home]), { warnings: [`files: rg exited abnormally for ${HOME}; keeping the previous list`] })
 })
