@@ -69,10 +69,18 @@ Item {
   onIgnoreFileReadyChanged: lister.begin()
   onStateLoadedChanged: lister.begin()
 
-  // The list refreshes when the launcher hides, where nothing competes with
-  // typing or painting. The previous list answers until a refresh lands.
+  // The list refreshes once the launcher has hidden, where nothing competes
+  // with typing or painting. Started in the hide's own tick it shared the GUI
+  // thread with the unmap and took 63 to 88 ms instead of 23 to 40. The
+  // previous list answers until a refresh lands.
   function hidden() {
-    if (lister.started) lister.catchUp(FileIndex.REFRESH_AFTER_MS)
+    if (lister.started) hideRefresh.restart()
+  }
+
+  Timer {
+    id: hideRefresh
+    interval: 250
+    onTriggered: lister.catchUp(FileIndex.REFRESH_AFTER_MS)
   }
 
   // A due recount waits for the refresh, so the list never queues behind it.
@@ -86,6 +94,7 @@ Item {
   // An open refreshes only a list kept through a long session, and after
   // the launcher's first frames instead of queueing behind them.
   function opened() {
+    hideRefresh.stop()
     if (lister.started && lister.stale(FileIndex.OPEN_REFRESH_AFTER_MS)) openRefresh.restart()
   }
 
