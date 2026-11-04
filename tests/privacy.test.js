@@ -204,6 +204,24 @@ test("the file-search write script makes 0600 files under umask 022 and never cl
   assert.notEqual(run("delete", state, "").status, 0)
 })
 
+test("a write never goes through a .tmp a killed write left behind", (t) => {
+  const home = tempHome(t)
+  const script = fileListerScript("writeScript")
+  const run = (mode, file, input) => spawnSync("bash", ["-c", 'umask 022; exec bash -c "$@"', "umask-022", script, "omacast-files", mode, file], { input, encoding: "utf8" })
+  const victim = home + "/victim"
+  fs.writeFileSync(victim, "keep\n", { mode: 0o644 })
+  for (const [kind, name] of [["replace", "file-search.json"], ["create", "file-search.ignore"]]) {
+    const file = `${home}/${name}`
+    fs.symlinkSync(victim, file + ".tmp")
+    assert.equal(run(kind, file, "new\n").status, 0, kind)
+    assert.equal(fs.lstatSync(file).isFile(), true, kind)
+    assert.equal(fs.readFileSync(file, "utf8"), "new\n", kind)
+    assert.equal(mode(file), 0o600, kind)
+    assert.equal(fs.readFileSync(victim, "utf8"), "keep\n", kind)
+  }
+  assert.deepEqual(fs.readdirSync(home).sort(), ["file-search.ignore", "file-search.json", "victim"])
+})
+
 test("a create killed before its content arrives leaves no file behind for the next create to skip", async (t) => {
   const home = tempHome(t)
   const file = home + "/file-search.ignore"
