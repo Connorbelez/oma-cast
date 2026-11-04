@@ -37,6 +37,22 @@ function parseList(text) {
   return rows
 }
 
+// A refresh's finished rg runs ({ root, exitCode, exitStatus, text }) as
+// { rows } to swap in, { missing: true } when the list script found an ignore
+// file missing (exit 3), or { warnings } to keep the previous list. rg exits 2
+// for any error, and exitStatus 1 means a signal ended the run, so either
+// leaves a list that may be cut short.
+function listOutcome(runs) {
+  if (runs.some(function(r) { return r.exitStatus === 0 && r.exitCode === 3 })) return { missing: true }
+  var failed = runs.filter(function(r) { return r.exitStatus !== 0 || r.exitCode !== 0 })
+  if (failed.length) {
+    return { warnings: failed.map(function(r) {
+      return "files: rg exited " + (r.exitStatus !== 0 ? "abnormally" : r.exitCode) + " for " + r.root + "; keeping the previous list"
+    }) }
+  }
+  return { rows: parseList(runs.map(function(r) { return r.text }).join("")) }
+}
+
 // zoxide prints "score path"; the git probe prints "<repo>/.git/logs/HEAD".
 function parseSignals(text) {
   var lines = String(text || "").split("\n")
@@ -176,7 +192,7 @@ if (typeof module !== "undefined") {
     DEFAULT_THRESHOLD: DEFAULT_THRESHOLD, ASK_AGAIN_MS: ASK_AGAIN_MS, RECOUNT_MS: RECOUNT_MS, REFRESH_AFTER_MS: REFRESH_AFTER_MS,
     DEFAULT_IGNORES: DEFAULT_IGNORES, PRIVATE_PATHS: PRIVATE_PATHS, defaultIgnoreText: defaultIgnoreText,
     RECOUNT_SCRIPT: RECOUNT_SCRIPT, COUNT_PROGRAM: COUNT_PROGRAM,
-    parseList: parseList, parseSignals: parseSignals, parseCounts: parseCounts, largeSubtrees: largeSubtrees, ignores: ignores,
+    parseList: parseList, listOutcome: listOutcome, parseSignals: parseSignals, parseCounts: parseCounts, largeSubtrees: largeSubtrees, ignores: ignores,
     ignoreLine: ignoreLine, ignoreFileText: ignoreFileText, displayPath: displayPath, groupDigits: groupDigits,
     treeToAsk: treeToAsk, toastFor: toastFor
   }

@@ -88,34 +88,32 @@ Item {
     lister.refreshStartedAt = Date.now()
     homeRun.root = roots[0]
     configRun.root = roots[1] || ""
-    for (var run of [homeRun, configRun]) { run.exitCode = -1; run.streamed = false }
+    for (var run of [homeRun, configRun]) { run.exited = false; run.streamed = false }
     homeRun.running = true
     if (configRun.root) configRun.running = true
     return true
   }
 
-  function runDone(run) { return run.exitCode >= 0 && run.streamed }
+  function runDone(run) { return run.exited && run.streamed }
 
   function listed() {
     if (!lister.refreshing || !lister.runDone(homeRun) || (configRun.root && !lister.runDone(configRun))) return
     lister.refreshing = false
     lister.readSignals()
-    var runs = configRun.root ? [homeRun, configRun] : [homeRun]
-    if (runs.some(function(run) { return run.exitCode === 3 })) {
+    var runs = (configRun.root ? [homeRun, configRun] : [homeRun]).map(function(run) {
+      return { root: run.root, exitCode: run.code, exitStatus: run.exitStatus, text: run.stdout.text }
+    })
+    var outcome = FileIndex.listOutcome(runs)
+    if (outcome.missing) {
       lister.restoreIgnoreFiles()
       return
     }
     lister.ignoreRetried = false
-    var texts = []
-    for (var i = 0; i < runs.length; i++) {
-      var text = runs[i].stdout.text
-      if (runs[i].exitCode >= 2) {
-        lister.message("warning", "files: rg exited " + runs[i].exitCode + " for " + runs[i].root + (text ? "; using its partial list" : "; keeping the previous list"), null)
-        if (!text) return
-      }
-      texts.push(text)
+    if (outcome.warnings) {
+      outcome.warnings.forEach(function(text) { lister.message("warning", text, null) })
+      return
     }
-    var next = FileIndex.parseList(texts.join(""))
+    var next = outcome.rows
     lister.rows = next
     lister.roots = runs.map(function(run) { return run.root })
     lister.listedAt = Date.now()
@@ -143,23 +141,37 @@ Item {
   Process {
     id: homeRun
     property string root: ""
-    property int exitCode: -1
+    property bool exited: false
     property bool streamed: false
+    property int code: -1
+    property int exitStatus: -1
     workingDirectory: lister.home
     command: ["bash", "-c", lister.listScript, "omacast-files", homeRun.root, lister.ignoreFile, lister.untouchedFile]
     stdout: StdioCollector { onStreamFinished: { homeRun.streamed = true; lister.listed() } }
-    onExited: function(exitCode) { homeRun.exitCode = exitCode; lister.listed() }
+    onExited: function(exitCode, exitStatus) {
+      homeRun.code = exitCode
+      homeRun.exitStatus = exitStatus
+      homeRun.exited = true
+      lister.listed()
+    }
   }
 
   Process {
     id: configRun
     property string root: ""
-    property int exitCode: -1
+    property bool exited: false
     property bool streamed: false
+    property int code: -1
+    property int exitStatus: -1
     workingDirectory: lister.home
     command: ["bash", "-c", lister.listScript, "omacast-files", configRun.root, lister.ignoreFile, lister.untouchedFile, "--hidden"]
     stdout: StdioCollector { onStreamFinished: { configRun.streamed = true; lister.listed() } }
-    onExited: function(exitCode) { configRun.exitCode = exitCode; lister.listed() }
+    onExited: function(exitCode, exitStatus) {
+      configRun.code = exitCode
+      configRun.exitStatus = exitStatus
+      configRun.exited = true
+      lister.listed()
+    }
   }
 
   // ------------------------------------------------------ usage signals
