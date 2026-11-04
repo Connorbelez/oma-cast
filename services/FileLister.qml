@@ -66,15 +66,20 @@ Item {
   onStateLoadedChanged: lister.begin()
 
   // The previous list answers until the refresh lands, so it starts after
-  // the launcher's first frames instead of queueing behind them.
+  // the launcher's first frames instead of queueing behind them. A refresh in
+  // flight already brings the list up to date.
   function opened() {
-    if (lister.started && Date.now() - lister.listedAt > FileIndex.REFRESH_AFTER_MS) openRefresh.restart()
+    if (lister.started && lister.stale()) openRefresh.restart()
+  }
+
+  function stale() {
+    return !lister.refreshing && (lister.dirty || Date.now() - lister.listedAt > FileIndex.REFRESH_AFTER_MS)
   }
 
   Timer {
     id: openRefresh
     interval: 250
-    onTriggered: lister.refresh(lister.defaultRoots)
+    onTriggered: if (lister.stale()) lister.refresh(lister.defaultRoots)
   }
 
   function hidden() {
