@@ -139,3 +139,84 @@ test("no QML hands clipboard text or prompts to a process's argv", () => {
     assert.doesNotMatch(source, /\["wl-copy"|omarchy-clipboard-paste-text"|omarchy-agent/, file)
   }
 })
+
+// File search: rg gets flags, roots and omacast's own ignore files, nothing a
+// user typed. Every element of every `command:` array in FileLister.qml must be
+// a quoted literal or one of these properties.
+const FILE_LISTER_ARGS = {
+  "lister.home": "the home root",
+  "homeRun.root": "a root, absolute (Backend.checkFilePath)",
+  "configRun.root": "a root, absolute (Backend.checkFilePath)",
+  "lister.ignoreFile": "~/.config/omacast/file-search.ignore",
+  "lister.untouchedFile": "the large untouched subtrees, as ignore patterns",
+  "lister.signalsScript": "a constant script",
+  "lister.writeScript": "a constant script",
+  "writer.mode": "create, append or replace",
+  "writer.path": "one of omacast's own files"
+}
+
+function fileListerSource() {
+  return fs.readFileSync(path.join(root, "services/FileLister.qml"), "utf8")
+}
+
+test("every process FileLister starts has fixed argv", () => {
+  const source = fileListerSource()
+  const commands = [...source.matchAll(/command:\s*\[([^\]]*)\]/g)].map((m) => m[1].split(",").map((s) => s.trim()))
+  assert.equal(commands.length, 5)
+  for (const argv of commands) {
+    for (const arg of argv) assert.ok(/^"[^"$`\\]*"$/.test(arg) || arg in FILE_LISTER_ARGS, `${arg} in [${argv}]`)
+    if (argv[0] === '"rg"') {
+      const literals = argv.filter((a) => a.startsWith('"')).slice(1)
+      for (const flag of literals) assert.ok(['"--files"', '"--hidden"', '"--ignore-file"'].includes(flag), flag)
+    }
+  }
+  const saves = [...source.matchAll(/lister\.save\(([^,]+),\s*([^,]+),/g)].map((m) => [m[1].trim(), m[2].trim()])
+  assert.ok(saves.length >= 4)
+  for (const [mode, file] of saves) {
+    assert.match(mode, /^"(create|append|replace)"$/)
+    assert.ok(["lister.ignoreFile", "lister.untouchedFile", "lister.stateFile"].includes(file), file)
+  }
+})
+
+function fileListerScript(name) {
+  const source = fileListerSource()
+  const single = source.match(new RegExp("property string " + name + ": '([^']*)'"))
+  if (single) return single[1]
+  return JSON.parse(source.match(new RegExp("property string " + name + ': ("(?:[^"\\\\]|\\\\.)*")'))[1])
+}
+
+test("the file-search write script makes 0600 files under umask 022 and never clobbers on create", (t) => {
+  const home = tempHome(t)
+  const script = fileListerScript("writeScript")
+  const run = (mode, file, input) => spawnSync("bash", ["-c", 'umask 022; exec bash -c "$@"', "umask-022", script, "omacast-files", mode, file], { input, encoding: "utf8" })
+  const file = home + "/file-search.ignore"
+  assert.equal(run("create", file, "node_modules/\n").status, 0)
+  assert.equal(run("create", file, "overwritten\n").status, 0)
+  assert.equal(run("append", file, "/Applications/UnrealEngine/\n").status, 0)
+  assert.equal(fs.readFileSync(file, "utf8"), "node_modules/\n/Applications/UnrealEngine/\n")
+  assert.equal(mode(file), 0o600)
+  const state = home + "/file-search.json"
+  assert.equal(run("replace", state, "{}\n").status, 0)
+  assert.equal(run("replace", state, '{"files":1}\n').status, 0)
+  assert.equal(fs.readFileSync(state, "utf8"), '{"files":1}\n')
+  assert.equal(mode(state), 0o600)
+  assert.deepEqual(fs.readdirSync(home).sort(), ["file-search.ignore", "file-search.json"])
+  assert.notEqual(run("delete", state, "").status, 0)
+})
+
+test("the usage-signal script passes only fixed flags and the home dir to zoxide and fd", (t) => {
+  const home = tempHome(t)
+  const log = home + "/cmdlines"
+  const fake = '#!/bin/bash\ntr "\\0" " " </proc/$$/cmdline >>"$LOG"; echo >>"$LOG"\n'
+  fs.writeFileSync(home + "/zoxide", fake + 'echo "  2.0 /home/u/Dev"\n', { mode: 0o755 })
+  fs.writeFileSync(home + "/fd", fake + 'echo "/home/u/Work/repo/.git/logs/HEAD"\n', { mode: 0o755 })
+  const r = spawnSync("bash", ["-c", fileListerScript("signalsScript"), "omacast-signals", "/home/u"], {
+    encoding: "utf8", env: { ...process.env, LOG: log, PATH: home + ":" + process.env.PATH }
+  })
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, "  2.0 /home/u/Dev\n/home/u/Work/repo/.git/logs/HEAD\n")
+  assert.deepEqual(fs.readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => l.trim().replace(/^\/bin\/bash \S+\/(\w+)/, "$1")), [
+    "zoxide query --list --score",
+    "fd -H -t f -p /\\.git/logs/HEAD$ --changed-within 14d --max-depth 8 --exclude node_modules . /home/u"
+  ])
+})
