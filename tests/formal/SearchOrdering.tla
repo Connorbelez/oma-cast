@@ -84,6 +84,10 @@ Go(T) == ui' = T.ui /\ ns' = T.ns /\ hp' = T.hp /\ gh' = T.gh
 (* LauncherWindow.rebuild()'s callback: the guard, then applySearch().     *)
 (* rows.ok is FALSE when flea hits were computed against another catalog  *)
 (* than the ids receive() maps them through.                               *)
+(* rows also stands for the root Files section. rootSearch.search ranks    *)
+(* file names in the JS task that maps the flea hits (or runs the JS       *)
+(* matcher), on the file list of that moment, so the section is part of    *)
+(* the same reply and needs no pending slot or reply action of its own.    *)
 UiCallback(X, req, rows) ==
   IF (GuardSerial => req.serial = X.ui.serial) /\ (GuardRevision => req.rev = X.ui.rev)
   THEN [X EXCEPT !.ui.rowsInput = rows.input,

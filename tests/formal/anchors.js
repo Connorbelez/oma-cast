@@ -87,6 +87,10 @@ const SHAPES = [
   ["the timeout fails over to the JS matcher", NS, "    onTriggered:", [/service\.fail\(/]],
   ["the helper loads on start and fails over when it exits", NS, "    onStarted:", [/service\.load\(\)/]],
   ["the helper exit handler fails over unless already disabled", NS, "    onExited:", [/if \(!service\.disabled\) service\.fail\(/]],
+  ["the root Files section is ranked inside rootSearch.search, so the reply that carries the flea hits carries it", BE, "      search: function(data) {",
+    [/ctx\.fileHits = backend\.rootFileHits\(query, ctx\)\s*\n\s*sections = RootSearch\.rootSections\(/]],
+  ["rootFileHits ranks synchronously and takes no callback", BE, "  function rootFileHits(",
+    [/^  function rootFileHits\(query, ctx\) \{/, /return backend\.searchFiles\(/, /RootSearch\.pathHits\(/]],
   ["the helper answers one line at a time, in order", RS, "pub(crate) fn run(",
     [/read_until\(b'\\n'/, /response\(&line, &mut catalog\)/, /writer\.flush\(\)\?/]],
 ]
