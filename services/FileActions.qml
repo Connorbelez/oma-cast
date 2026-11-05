@@ -48,9 +48,9 @@ Item {
     return mode === "image" || mode === "svg" ? actions.imageLimit : actions.textLimit
   }
 
-  readonly property string previewScript: '[[ -f $1 ]] || exit 4; meta=$(stat -Lc "%s %Y" -- "$1") || exit 3; size=${meta%% *}; info=; case $2 in image) info=$(file -Lb -- "$1") ;; pdf) command -v pdftotext >/dev/null && info=pdftotext || info=none ;; esac; printf "%s\\n%s\\n" "$meta" "$info"; (( size <= $3 )) || exit 0; case $2 in text) exec head -c 65536 -- "$1" ;; svg) exec head -c 4096 -- "$1" ;; pdf) [[ $info = pdftotext ]] && pdftotext -l 1 -q -- "$1" - | head -c 65536 ;; esac; exit 0'
+  readonly property string previewScript: 'meta=$(stat -Lc "%s %Y" -- "$1" 2>/dev/null || stat -c "%s %Y" -- "$1") || exit 3; [[ -f $1 ]] || { printf "%s\\n\\n" "$meta"; exit 4; }; size=${meta%% *}; info=; case $2 in image) info=$(file -Lb -- "$1") ;; pdf) command -v pdftotext >/dev/null && info=pdftotext || info=none ;; esac; printf "%s\\n%s\\n" "$meta" "$info"; (( size <= $3 )) || exit 0; case $2 in text) exec head -c 65536 -- "$1" ;; svg) exec head -c 4096 -- "$1" ;; pdf) [[ $info = pdftotext ]] && pdftotext -l 1 -q -- "$1" - | head -c 65536 ;; esac; exit 0'
 
-  function parsePreview(path, mode, output, limit) {
+  function parsePreview(path, mode, output, limit, code) {
     var slash = path.lastIndexOf("/")
     var base = { kind: "meta", path: path, name: path.slice(slash + 1), dir: path.slice(0, slash) || "/" }
     var first = output.indexOf("\n")
@@ -61,7 +61,7 @@ Item {
     var body = output.slice(second + 1)
     base.size = Number(meta[0])
     base.mtime = Number(meta[1])
-    if (base.size > limit) return base
+    if (code !== 0 || base.size > limit) return base
     if (mode === "image" || mode === "svg") {
       var dims = mode === "image" ? actions.imageSize(info) : actions.svgSize(body)
       base.kind = "image"
@@ -145,7 +145,7 @@ Item {
     previewRun.done = null
     var next = actions.queued
     actions.queued = null
-    if (done) done(actions.parsePreview(previewRun.path, previewRun.mode, previewRun.code === 0 ? previewOut.text : "", Number(previewRun.limit)))
+    if (done) done(actions.parsePreview(previewRun.path, previewRun.mode, previewOut.text, Number(previewRun.limit), previewRun.code))
     if (next) actions.startPreview(next)
   }
 

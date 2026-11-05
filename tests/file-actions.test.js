@@ -43,7 +43,7 @@ function preview(file) {
   const mode = actions.previewMode(path.basename(file))
   const limit = actions.limitFor(mode)
   const r = spawnSync("bash", ["-c", qmlString(source, "previewScript"), "omacast-preview", file, mode, String(limit)], { encoding: "utf8", timeout: 5000 })
-  return { result: actions.parsePreview(file, mode, r.status === 0 ? r.stdout : "", limit), status: r.status, bytes: Buffer.byteLength(r.stdout) }
+  return { result: actions.parsePreview(file, mode, r.stdout, limit, r.status), status: r.status, bytes: Buffer.byteLength(r.stdout) }
 }
 
 test("the trash takes only a listed file under the home dir", () => {
@@ -164,6 +164,33 @@ test("a FIFO in the list is never opened", (t) => {
   assert.equal(r.result.kind, "meta")
 })
 
+test("an unreadable file, a FIFO, a folder and a dangling link keep their size and modified time", (t) => {
+  const dir = tempDir(t)
+  const locked = path.join(dir, "locked.txt")
+  fs.writeFileSync(locked, "secret\n")
+  fs.chmodSync(locked, 0)
+  const fifo = path.join(dir, "pipe.txt")
+  assert.equal(spawnSync("mkfifo", [fifo]).status, 0)
+  const folder = path.join(dir, "folder.txt")
+  fs.mkdirSync(folder)
+  const dangling = path.join(dir, "gone.txt")
+  fs.symlinkSync(path.join(dir, "missing"), dangling)
+  const mtime = (file) => Math.floor(fs.lstatSync(file).mtimeMs / 1000)
+  const unreadable = spawnSync("head", ["-c", "1", locked]).status !== 0
+  for (const [file, size] of [[locked, 7], [fifo, 0], [folder, fs.statSync(folder).size], [dangling, path.join(dir, "missing").length]]) {
+    if (file === locked && !unreadable) continue
+    const { result } = preview(file)
+    assert.deepEqual({ kind: result.kind, size: result.size, mtime: result.mtime }, { kind: "meta", size, mtime: mtime(file) }, file)
+    assert.equal(result.text, undefined)
+  }
+})
+
+test("a preview that timed out shows metadata only", () => {
+  const actions = fileActions()
+  const result = actions.parsePreview("/home/u/slow.pdf", "pdf", "52000 1700000000\npdftotext\nHalf a pa", actions.textLimit, 124)
+  assert.deepEqual({ ...result }, { kind: "meta", path: "/home/u/slow.pdf", name: "slow.pdf", dir: "/home/u", size: 52000, mtime: 1700000000 })
+})
+
 function png(width, height) {
   const crcTable = Array.from({ length: 256 }, (_, n) => {
     let c = n
@@ -204,7 +231,7 @@ test("an image reports its dimensions and a file URL Qt can load", { skip: !has(
 // and a BMP its bit depth after it.
 test("an image's dimensions come from its pixel size in file's output, never its density", () => {
   const actions = fileActions()
-  const size = (info) => (({ width, height }) => ({ width, height }))(actions.parsePreview("/home/u/a.jpg", "image", "1000 1700000000\n" + info + "\n", actions.imageLimit))
+  const size = (info) => (({ width, height }) => ({ width, height }))(actions.parsePreview("/home/u/a.jpg", "image", "1000 1700000000\n" + info + "\n", actions.imageLimit, 0))
   const cases = [
     ["JPEG image data, JFIF standard 1.01, aspect ratio, density 96x96, segment length 16, baseline, precision 8, 5120x2880, components 3", 5120, 2880],
     ["JPEG image data, JFIF standard 1.01, aspect ratio, density 1x1, segment length 16, baseline, precision 8, 4000x3000, components 3", 4000, 3000],
