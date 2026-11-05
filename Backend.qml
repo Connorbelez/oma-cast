@@ -222,15 +222,18 @@ Item {
   readonly property int fileRowsLimit: 50
   property var fileSignalsMemo: null
 
-  // Rebuilt when the signal probe reruns or the frecency store changes, so
-  // the prior's per-folder cache lasts across keystrokes.
+  // Rebuilt only when the signal probe reruns or a file's frecency entry
+  // changes, so the per-folder prior cache outlives root launches, which
+  // record their own visits.
   function fileSignals() {
-    var key = fileLister.signalsAt + ":" + backend.frecencyRevision
-    if (backend.fileSignalsMemo && backend.fileSignalsMemo.key === key) return backend.fileSignalsMemo.signals
     var items = frecencyStore.loaded ? frecencyStore.doc.items : {}
+    var files = []
+    for (var id in items) if (id.charAt(0) === "/") files.push(id)
+    var key = fileLister.signalsAt + "\n" + files.map(function(path) { return path + "\t" + items[path].anchor }).join("\n")
+    if (backend.fileSignalsMemo && backend.fileSignalsMemo.key === key) return backend.fileSignalsMemo.signals
     var nowMs = Date.now()
     var opens = {}
-    for (var id in items) if (id.charAt(0) === "/") opens[id] = Frecency.score(items[id].anchor, nowMs / 1000)
+    files.forEach(function(path) { opens[path] = Frecency.score(items[path].anchor, nowMs / 1000) })
     var signals = FileRanker.signals(fileLister.signalsText, opens, backend.paths.home, nowMs)
     backend.fileSignalsMemo = { key: key, signals: signals }
     return signals
@@ -239,7 +242,7 @@ Item {
   Timer {
     id: fileWarmTimer
     interval: 50
-    onTriggered: FileRanker.prepare(fileLister.rows, backend.fileSignals())
+    onTriggered: FileRanker.prepare(fileLister.rows, backend.fileSignals(), backend.fileRowsLimit)
   }
 
   Connections {
@@ -783,8 +786,7 @@ Item {
   readonly property int dataRevision: candidatesRevision + (settingsStore.loaded ? 1 : 0) + (frecencyStore.loaded ? 1 : 0)
   property int storeRevision: 0
   Connections { target: settingsStore; function onChanged() { backend.storeRevision++ } }
-  property int frecencyRevision: 0
-  Connections { target: frecencyStore; function onChanged() { backend.storeRevision++; backend.frecencyRevision++ } }
+  Connections { target: frecencyStore; function onChanged() { backend.storeRevision++ } }
   Connections { target: calculatorStore; function onChanged() { backend.storeRevision++ } }
 
   FileView {

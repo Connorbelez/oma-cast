@@ -243,17 +243,12 @@ function rankWords(rows, listed, words, s, max) {
   return { hits: count, rows: out }
 }
 
-// Builds the joined names and every listed folder's prior, so the first
-// keystroke after a new list or new signals pays for neither (20 to 40 ms on
-// the dev machine's 19,900 files).
-function prepare(rows, s) {
+// Builds the joined names, every listed folder's prior and the empty
+// query's rows, so the first keystroke after a new list or new signals pays
+// for none of them (20 to 40 ms on the dev machine's 19,900 files).
+function prepare(rows, s, limit) {
   joinedNames(rows)
-  var dir = null
-  for (var r = 0; r < rows.length; r++) {
-    if (rows[r].dir === dir) continue
-    dir = rows[r].dir
-    prior(dir, s)
-  }
+  recent(rows, s, limit)
 }
 
 function rank(rows, query, s, limit) {
@@ -287,9 +282,12 @@ function cutFor(values, k) {
 
 // The empty query: every row with any usage, by usage alone. Scores go in a
 // typed array, a heap finds the cut for the best `limit`, and only rows at or
-// above it are sorted as objects.
+// above it are sorted as objects. The result depends on nothing else, so it
+// is kept on the signals object.
 function recent(rows, s, limit) {
   var max = limit > 0 ? limit : Infinity
+  var cached = s.recent
+  if (cached && cached.rows === rows && cached.max === max) return cached.result
   var values = new Float64Array(rows.length)
   var hits = 0
   var dir = null
@@ -312,7 +310,8 @@ function recent(rows, s, limit) {
   }
   var out = []
   take(out, best, max)
-  return { hits: hits, rows: out }
+  s.recent = { rows: rows, max: max, result: { hits: hits, rows: out } }
+  return s.recent.result
 }
 
 if (typeof module !== "undefined") {

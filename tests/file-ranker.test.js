@@ -82,6 +82,9 @@ test("the empty query lists files by usage alone", () => {
     "Dev/sales-crm/package.json"
   ])
   assert.equal(recent.hits, 164)
+  const s = signals()
+  FileRanker.prepare(rows, s, 4)
+  assert.deepEqual(FileRanker.rank(rows, "", s, 4), recent, "prepare keeps the same rows for the empty query")
 })
 
 test("a limit keeps the best rows of the full order and the full hit count", () => {
