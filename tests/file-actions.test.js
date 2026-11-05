@@ -56,6 +56,24 @@ test("the trash takes only a listed file under the home dir", () => {
   assert.throws(() => actions.trashPath("notes b.txt", rows, "/home/u"), /Expected an absolute path/)
 })
 
+function checkFilePath() {
+  const backend = fs.readFileSync(path.join(root, "Backend.qml"), "utf8")
+  const start = backend.indexOf("\n  function checkFilePath(")
+  assert.ok(start >= 0)
+  return vm.runInNewContext("(" + backend.slice(start + 3, backend.indexOf("\n  }\n", start) + 4) + ")")
+}
+
+test("a root, listed path or trash path must be absolute and normalised", () => {
+  const check = checkFilePath()
+  assert.equal(check("/home/u"), "/home/u")
+  assert.equal(check("/home/u/"), "/home/u")
+  assert.equal(check("/"), "/")
+  assert.equal(check("/home/u/.config/a..b/.x"), "/home/u/.config/a..b/.x")
+  for (const bad of ["/home/u/../x", "/home/u/./a", "/home/u//a", "/home/u/..", "/home/u/.", "/..", "u/a", "", "/home/u/a\nb"]) {
+    assert.throws(() => check(bad), /absolute|normalised/, JSON.stringify(bad))
+  }
+})
+
 test("gio trash moves a file whose name holds a space and a % with its .trashinfo, and the next listing leaves it out", { skip: !has("gio") || !has("rg") }, (t) => {
   const dir = tempDir(t)
   const home = path.join(dir, "home")

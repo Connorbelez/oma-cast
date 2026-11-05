@@ -212,10 +212,12 @@ Item {
   }
 
   // A path that reaches rg's argv or the ignore file: absolute, so it cannot
-  // read as a flag, and one line, so it cannot add a second pattern.
+  // read as a flag, one line, so it cannot add a second pattern, and
+  // normalised, so a prefix check against the home dir means what it says.
   function checkFilePath(value) {
     var path = String(value || "")
     if (path.charAt(0) !== "/" || /[\n\r\0]/.test(path)) throw new Error("Expected an absolute path, got " + JSON.stringify(path))
+    if (/\/\/|\/\.\.?(\/|$)/.test(path)) throw new Error("Expected a normalised path, got " + JSON.stringify(path))
     return path.replace(/\/+$/, "") || "/"
   }
 
@@ -732,8 +734,7 @@ Item {
       refresh: function(data) {
         var roots = data && data.roots !== undefined ? data.roots : fileLister.defaultRoots
         if (!Array.isArray(roots) || roots.length < 1 || roots.length > 2) throw new Error("roots must be one or two absolute paths")
-        roots.forEach(function(r) { backend.checkFilePath(r) })
-        return { started: fileLister.refresh(roots) }
+        return { started: fileLister.refresh(roots.map(function(r) { return backend.checkFilePath(r) })) }
       },
       largeSubtrees: function() {
         var askedAt = backend.fileSearchSettings().askedAt
