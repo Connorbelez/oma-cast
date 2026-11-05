@@ -21,18 +21,19 @@ const root = path.join(__dirname, "..", "..")
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8")
 
 // The text of one function or handler: from its opening line to the closing
-// brace at the same indent (or the single line, for one-liners).
+// brace at the opening line's indent, or that line alone when it opens no
+// block.
 function body(file, opener) {
   const source = read(file)
   const start = source.indexOf(opener)
   if (start < 0) return null
   const lineStart = source.lastIndexOf("\n", start) + 1
-  const indent = source.slice(lineStart, start).match(/^\s*/)[0]
+  const indent = source.slice(lineStart).match(/^[ \t]*/)[0]
   const lineEnd = source.indexOf("\n", start)
   const firstLine = source.slice(start, lineEnd < 0 ? undefined : lineEnd)
   const opens = (firstLine.match(/{/g) || []).length
   const closes = (firstLine.match(/}/g) || []).length
-  if (opens > 0 && opens === closes) return firstLine
+  if (opens === closes) return firstLine
   const end = source.indexOf("\n" + indent + "}", start)
   return end < 0 ? null : source.slice(start, end + indent.length + 2)
 }
@@ -41,6 +42,7 @@ const LW = "ui/LauncherWindow.qml"
 const NS = "services/NativeSearch.qml"
 const BE = "Backend.qml"
 const RS = "search/src/protocol.rs"
+const CS = "services/ContentSearch.qml"
 
 // [constant, file, opener, [patterns that must all match]]
 const GUARDS = [
@@ -54,6 +56,10 @@ const GUARDS = [
   ["InvalidateCancels", NS, "  function invalidate(", [/service\.cancel\(\)/, /if \(request\) request\.callback\(null\)/]],
   ["SendOnlyWhenLoaded", NS, "  function search(", [/else if \(service\.loaded\) service\.send\(\)/]],
   ["CalcSkipsAlert", LW, "    function onCalculatorRevisionChanged(", [/!window\.alert/]],
+  ["ContentSerialCheck", LW, "  function searchContents(", [/var serial = window\.searchSerial/, /serial: serial/, /if \(reply\.serial !== window\.searchSerial\) \{/]],
+  ["ContentPendingCheck", CS, "  function finished(", [/if \(request && request === service\.pending\) \{/]],
+  ["CancelContentOnRebuild", LW, "  function rebuild(", [/window\.cancelContents\(\)/]],
+  ["CancelContentOnHide", LW, "  onShownChanged: {", [/window\.cancelContents\(\)/]],
 ]
 
 // receive() drops a reply whose id is not pending if either filter is there.
@@ -92,6 +98,28 @@ const SHAPES = [
   ["rootFileHits ranks synchronously and takes no callback", BE, "  function rootFileHits(",
     [/^  function rootFileHits\(query, ctx\) \{/, /return backend\.searchFiles\(/, /RootSearch\.pathHits\(/,
       /^  function rootFileHits\(query, ctx\) \{(?:(?!Qt\.callLater|\bProcess\b|function\s*\()[\s\S])*?\n  \}/]],
+  ["cancelContents stops the stillness timer, then cancels ContentSearch", LW, "  function cancelContents(",
+    [/contentDelay\.stop\(\)\s*\n\s*window\.backend\.cancelContents\(\)/]],
+  ["Backend.cancelContents is ContentSearch.cancel", BE, "  function cancelContents(", [/^  function cancelContents\(\) \{ contentSearch\.cancel\(\) \}$/]],
+  ["rebuild restarts the stillness timer only in the files view, after any cancel and before the synchronous search", LW, "  function rebuild(",
+    [/if \(window\.filesView\) contentDelay\.restart\(\)\s*\n\s*window\.backend\.searchAsync\(/, /contentDelay\.restart\(\)(?![\s\S]*window\.cancelContents\(\))/]],
+  ["popToRoot leaves the files view before its rebuild, so no hidden rebuild restarts the stillness timer", LW, "  function popToRoot(",
+    [/window\.stack = \[\{ kind: "root"[\s\S]*window\.rebuild\(true\)/]],
+  ["the files view answers synchronously in rootSearch.search", BE, "      search: function(data) {",
+    [/view\.kind === "files"\) sections = view\.filter === "contents" \? \[\] : backend\.fileSections\(query\)/]],
+  ["applySearch replaces every row, so the Contents section goes with the old name rows", LW, "  function applySearch(", [/Rows\.update\(rows, next\)/]],
+  ["Backend.searchContents hands the request's serial back with the reply", BE, "  function searchContents(",
+    [/contentSearch\.search\(\{ serial: data\.serial,/, /callback\(\{ serial: reply\.serial,/]],
+  ["search() cancels, records the request, then starts", CS, "  function search(",
+    [/service\.cancel\(\)\s*\n\s*service\.pending = \{[^\n]*\}\s*\n\s*service\.start\(\)/]],
+  ["start() runs one request at a time and waits for a killed run to exit", CS, "  function start(",
+    [/if \(!request \|\| run\.request \|\| run\.running\) return/, /run\.request = request/, /killTimer\.restart\(\)/]],
+  ["cancel() drops the pending request and signals only its own run", CS, "  function cancel(",
+    [/service\.pending = null/, /killTimer\.stop\(\)/, /if \(run\.request === request && run\.running\) run\.signal\(15\)/]],
+  ["kill() signals the pending request's run and keeps the request pending", CS, "  function kill(",
+    [/if \(!request \|\| run\.request !== request \|\| !run\.running\) return/, /run\.signal\(15\)/, /^(?![\s\S]*service\.pending =)/]],
+  ["finished() waits for exit and output, clears the run, delivers, then starts a waiting request", CS, "  function finished(",
+    [/if \(!run\.exited \|\| !run\.streamed\) return/, /run\.request = null[\s\S]*service\.pending = null[\s\S]*request\.callback\(\{ serial: request\.serial,[\s\S]*\}\s*\n\s*service\.start\(\)\s*\n  \}$/]],
   ["the helper answers one line at a time, in order", RS, "pub(crate) fn run(",
     [/read_until\(b'\\n'/, /response\(&line, &mut catalog\)/, /writer\.flush\(\)\?/]],
 ]
@@ -115,6 +143,16 @@ function check() {
   }
   const callers = (read(LW).match(/window\.request\(/g) || []).length
   if (callers !== 3) problems.push(`shape "perform, confirmAlert and pick are the only callers of request()": found ${callers} calls to window.request( in ${LW}, expected 3`)
+  const lw = read(LW)
+  if (!/Timer \{\s*id: contentDelay\s*interval: 150\s*onTriggered: window\.searchContents\(\)\s*\}/.test(lw))
+    problems.push(`shape "contentDelay is the only caller of searchContents()": the contentDelay Timer in ${LW} changed`)
+  const contentCalls = (lw.match(/window\.searchContents\(/g) || []).length
+  if (contentCalls !== 1) problems.push(`shape "contentDelay is the only caller of searchContents()": found ${contentCalls} calls to window.searchContents( in ${LW}, expected 1`)
+  const cs = read(CS)
+  if (!/id: killTimer\s*interval: service\.killAfterMs\s*onTriggered: service\.kill\(\)/.test(cs))
+    problems.push(`shape "the kill timer calls kill()": the killTimer in ${CS} changed`)
+  if (!/onExited: function\(exitCode, exitStatus\) \{[^}]*run\.exited = true\s*\n\s*service\.finished\(\)/.test(cs))
+    problems.push(`shape "the run's exit reaches finished()": the onExited handler in ${CS} changed`)
   const writes = (read(LW).match(/window\.query = /g) || []).length
   if (writes !== 6) problems.push(`shape "every query write is followed by rebuild()": found ${writes} "window.query = " in ${LW}, expected 6; check the new one rebuilds, then update this count`)
   return { guards, problems }

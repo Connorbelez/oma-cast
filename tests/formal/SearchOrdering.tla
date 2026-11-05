@@ -11,6 +11,9 @@
 (*                           send(), fail(), receive(), the timeout Timer, *)
 (*                           the helper Process (onStarted, onExited)      *)
 (*   search/src/protocol.rs  run(): one reply per request line, in order   *)
+(*   services/ContentSearch.qml  search(), start(), cancel(), kill(),      *)
+(*                           finished(): the Search Files content source,  *)
+(*                           one rg run at a time, its own pending slot    *)
 (*                                                                         *)
 (* QML runs JavaScript on one thread and every handler runs to completion, *)
 (* including property-change handlers it triggers. So each action below is *)
@@ -40,6 +43,10 @@ CONSTANTS
   ReplyIdCheck,       \* NativeSearch.receive(): drop replies whose id is not pending
   SendOnlyWhenLoaded, \* NativeSearch.search(): else if (service.loaded) service.send()
   CalcSkipsAlert,     \* onCalculatorRevisionChanged: skips the rebuild while an alert is open
+  ContentSerialCheck, \* searchContents() callback: reply.serial !== window.searchSerial
+  ContentPendingCheck,    \* ContentSearch.finished(): only the pending request's run is delivered
+  CancelContentOnRebuild, \* rebuild(): window.cancelContents()
+  CancelContentOnHide,    \* onShownChanged: window.cancelContents()
   MaxEvents,          \* bound: user and environment events per behaviour
   MaxReindex          \* bound: candidate reloads per behaviour
 
@@ -47,13 +54,19 @@ VARIABLES
   ui,   \* LauncherWindow + Backend state
   ns,   \* NativeSearch state
   hp,   \* the helper process: its stdin, its loaded catalog, its stdout
+  cs,   \* ContentSearch state: the pending request and the rg run
   gh,   \* ghost flags: set when a harm happens, never cleared
   env   \* event budget (bookkeeping for the bounds only)
 
-vars == <<ui, ns, hp, gh, env>>
+vars == <<ui, ns, hp, cs, gh, env>>
 
 NoReq == [id |-> 0, input |-> 0, serial |-> 0, rev |-> 0]
 NoCatalog == -1
+NoInput == -1
+\* A content request is named by the serial it carries: the stillness timer
+\* starts at most one per rebuild, and every rebuild bumps the serial.
+NoCReq == [serial |-> 0, input |-> 0]
+NoRun == [serial |-> 0, input |-> 0, killed |-> FALSE]
 
 Init ==
   /\ ui = [shown |-> FALSE,      \* Launcher.opened / LauncherWindow.shown
@@ -63,7 +76,9 @@ Init ==
            overlay |-> "none",   \* "none" | "panel" (actionPanelOpen) | "alert"
            rowsInput |-> 0,      \* the input the visible rows were computed for
            cat |-> 0,            \* Backend.candidates, NativeSearch.ids/.entries
-           rev |-> 0]            \* Backend.candidatesRevision
+           rev |-> 0,            \* Backend.candidatesRevision
+           ctimer |-> FALSE,     \* contentDelay, the 150 ms stillness timer, running
+           contentInput |-> NoInput] \* the input the Contents rows were computed for
   /\ ns = [serial |-> 0,         \* NativeSearch.serial (request and load ids)
            loadId |-> 0,
            loaded |-> FALSE,
@@ -72,13 +87,16 @@ Init ==
            started |-> FALSE,    \* helper's onStarted has run
            req |-> NoReq]        \* NativeSearch.pending (id 0 = null)
   /\ hp = [toH |-> << >>, cat |-> NoCatalog, fromH |-> << >>]
-  /\ gh = [staleApply |-> FALSE, staleActivate |-> FALSE, badCatalog |-> FALSE]
+  /\ cs = [req |-> NoCReq,       \* ContentSearch.pending
+           run |-> NoRun]        \* the request the rg Process runs for; killed once signalled
+  /\ gh = [staleApply |-> FALSE, staleActivate |-> FALSE, badCatalog |-> FALSE,
+           staleContent |-> FALSE]
   /\ env = [events |-> 0, reindexes |-> 0]
 
 \* The whole state as one record, so a JS task can be written as a chain of
 \* state-to-state operators, in the order the code runs them.
-S == [ui |-> ui, ns |-> ns, hp |-> hp, gh |-> gh]
-Go(T) == ui' = T.ui /\ ns' = T.ns /\ hp' = T.hp /\ gh' = T.gh
+S == [ui |-> ui, ns |-> ns, hp |-> hp, cs |-> cs, gh |-> gh]
+Go(T) == ui' = T.ui /\ ns' = T.ns /\ hp' = T.hp /\ cs' = T.cs /\ gh' = T.gh
 
 -----------------------------------------------------------------------------
 (* LauncherWindow.rebuild()'s callback: the guard, then applySearch().     *)
@@ -88,9 +106,11 @@ Go(T) == ui' = T.ui /\ ns' = T.ns /\ hp' = T.hp /\ gh' = T.gh
 (* file names in the JS task that maps the flea hits (or runs the JS       *)
 (* matcher), on the file list of that moment, so the section is part of    *)
 (* the same reply and needs no pending slot or reply action of its own.    *)
+(* applySearch() replaces every row, so the Contents section goes too.     *)
 UiCallback(X, req, rows) ==
   IF (GuardSerial => req.serial = X.ui.serial) /\ (GuardRevision => req.rev = X.ui.rev)
   THEN [X EXCEPT !.ui.rowsInput = rows.input,
+                 !.ui.contentInput = NoInput,
                  !.ui.pending = FALSE,
                  !.gh.staleApply = @ \/ rows.input # X.ui.input,
                  !.gh.badCatalog = @ \/ ~rows.ok]
@@ -153,17 +173,53 @@ NsReceive(X, m) ==
      ELSE IF req.id = 0 \/ m.k # "hits" THEN NsFail(X)
      ELSE UiCallback(NsCancel(X), req, [input |-> m.input, ok |-> m.cat = X.ui.cat])
 
+-----------------------------------------------------------------------------
+(* The content source: ContentSearch.qml and the view's side of it.        *)
+
+\* ContentSearch.cancel(): drop the pending request, stop the kill timer,
+\* and SIGTERM the run when it is the pending request's. A run that is not
+\* the pending one was killed when its request was dropped.
+CsCancel(X) ==
+  IF X.cs.req.serial = 0 THEN X
+  ELSE [X EXCEPT !.cs.req = NoCReq,
+                 !.cs.run.killed = @ \/ X.cs.run.serial = X.cs.req.serial]
+
+\* window.cancelContents(): contentDelay.stop(), then ContentSearch.cancel().
+UiCancelContents(X) == CsCancel([X EXCEPT !.ui.ctimer = FALSE])
+
+\* ContentSearch.start(): one run at a time. A request made while a killed
+\* run is still exiting starts when that run has exited.
+CsStart(X) ==
+  IF X.cs.req.serial # 0 /\ X.cs.run.serial = 0
+  THEN [X EXCEPT !.cs.run = [serial |-> X.cs.req.serial, input |-> X.cs.req.input, killed |-> FALSE]]
+  ELSE X
+
+CsSearch(X, r) == CsStart([CsCancel(X) EXCEPT !.cs.req = r])
+
+\* The view's content callback: the serial guard, then applyContents().
+UiContents(X, r) ==
+  IF ContentSerialCheck => r.serial = X.ui.serial
+  THEN [X EXCEPT !.ui.contentInput = r.input,
+                 !.gh.staleContent = @ \/ r.input # X.ui.input]
+  ELSE X
+
 \* rebuild() through Backend.searchAsync(). The first set member is the
 \* synchronous path (empty query, pushed or alias view, JS matcher); the
-\* second is a root query handed to NativeSearch.
+\* second is a root query handed to NativeSearch. The files view is a
+\* synchronous view and the only one that restarts contentDelay; it is
+\* open only while shown, because popToRoot(), the one rebuild while
+\* hidden, leaves it first.
 UiRebuild(X) ==
   LET serial == X.ui.serial + 1
       X1 == [X EXCEPT !.ui.serial = serial]
       X2 == IF CancelOnRebuild THEN NsCancel(X1) ELSE X1
-      X3 == [X2 EXCEPT !.ui.pending = TRUE]
+      X2c == IF CancelContentOnRebuild THEN UiCancelContents(X2) ELSE X2
+      X3 == [X2c EXCEPT !.ui.pending = TRUE]
       req == [id |-> 0, input |-> X3.ui.input, serial |-> serial, rev |-> X3.ui.rev]
       X4 == NsCancel(X3)                     \* searchAsync(): nativeSearch.cancel()
-  IN { UiCallback(X4, req, Fallback(req)), NsSearch(X4, req) }
+      Sync == UiCallback(X4, req, Fallback(req))
+  IN { Sync, NsSearch(X4, req) }
+     \cup (IF X4.ui.shown THEN {[Sync EXCEPT !.ui.ctimer = TRUE]} ELSE {})
 
 -----------------------------------------------------------------------------
 (* User and environment events. Each costs one unit of the event budget.   *)
@@ -175,8 +231,9 @@ Show == Spend /\ (~ui.shown /\ \E T \in UiRebuild([S EXCEPT !.ui.shown = TRUE]) 
 \* Launcher.close() -> onShownChanged with shown false, closePopups().
 Hide == Spend /\ (ui.shown /\
   LET Y == [S EXCEPT !.ui.shown = FALSE, !.ui.overlay = "none"]
-  IN Go(IF CancelOnHide THEN NsCancel([Y EXCEPT !.ui.serial = @ + 1, !.ui.pending = FALSE])
-        ELSE Y))
+      Y1 == IF CancelOnHide THEN NsCancel([Y EXCEPT !.ui.serial = @ + 1, !.ui.pending = FALSE])
+            ELSE Y
+  IN Go(IF CancelContentOnHide THEN UiCancelContents(Y1) ELSE Y1))
 
 \* popTimer -> popToRoot() while hidden.
 PopToRoot == Spend /\ (~ui.shown /\ \E T \in UiRebuild([S EXCEPT !.ui.input = @ + 1]) : Go(T))
@@ -185,18 +242,25 @@ PopToRoot == Spend /\ (~ui.shown /\ \E T \in UiRebuild([S EXCEPT !.ui.input = @ 
 Edit == Spend /\ (ui.shown /\ ui.overlay = "none" /\
   \E T \in UiRebuild([S EXCEPT !.ui.input = @ + 1]) : Go(T))
 
+\* The selected row is a name row, or a Contents row when that section shows.
+\* TRUE when the row was computed for something other than the input now.
+StaleRow == {ui.rowsInput # ui.input} \cup
+            (IF ui.contentInput # NoInput THEN {ui.contentInput # ui.input} ELSE {})
+
 \* perform(): Enter, Ctrl+Enter, Ctrl+1..9, a click, or an action-panel
 \* entry. The outcome opens an alert, rebuilds for a toast, or neither.
 Activate == Spend /\ (ui.shown /\ ui.overlay \in {"none", "panel"} /\ (GuardPerform => ~ui.pending) /\
-  LET X == [S EXCEPT !.ui.overlay = "none",
-                     !.gh.staleActivate = @ \/ ui.rowsInput # ui.input]
-  IN \E T \in {X, [X EXCEPT !.ui.overlay = "alert"]} \cup UiRebuild(X) : Go(T))
+  \E stale \in StaleRow :
+    LET X == [S EXCEPT !.ui.overlay = "none",
+                       !.gh.staleActivate = @ \/ stale]
+    IN \E T \in {X, [X EXCEPT !.ui.overlay = "alert"]} \cup UiRebuild(X) : Go(T))
 
 \* toggleActionPanel() -> actionsForSelected(): the panel lists actions for
 \* the selected row, so opening it on stale rows offers a stale row's actions.
 OpenPanel == Spend /\ (ui.shown /\ ui.overlay = "none" /\ (GuardActions => ~ui.pending) /\
-  Go([S EXCEPT !.ui.overlay = "panel",
-               !.gh.staleActivate = @ \/ ui.rowsInput # ui.input]))
+  \E stale \in StaleRow :
+    Go([S EXCEPT !.ui.overlay = "panel",
+                 !.gh.staleActivate = @ \/ stale]))
 
 \* Esc on the panel or alert; confirmAlert() may rebuild for a toast or push.
 CloseOverlay == Spend /\ (ui.overlay # "none" /\
@@ -229,7 +293,7 @@ HelperStart == ns.running /\ ~ns.started /\ UNCHANGED env /\
 
 \* protocol.rs run(): read one line, answer it, flush. Searches run against
 \* whatever catalog the last load installed.
-HelperStep == ns.started /\ hp.toH # << >> /\ UNCHANGED <<ui, ns, gh, env>> /\
+HelperStep == ns.started /\ hp.toH # << >> /\ UNCHANGED <<ui, ns, cs, gh, env>> /\
   LET m == Head(hp.toH)
   IN hp' = [toH |-> Tail(hp.toH),
             cat |-> IF m.k = "load" THEN m.cat ELSE hp.cat,
@@ -251,10 +315,39 @@ Timeout == ns.req.id # 0 /\ UNCHANGED env /\ Go(NsFail(S))
 \* helper onExited while not yet disabled.
 HelperExit == ns.running /\ ~ns.disabled /\ UNCHANGED env /\ Go(NsFail(S))
 
+-----------------------------------------------------------------------------
+(* The content source's own events.                                        *)
+
+\* contentDelay fires -> searchContents(): Backend runs the reveal rule
+\* (the first member, nothing starts) or ContentSearch.search() with the
+\* serial and the query of this moment.
+ContentFire == ui.ctimer /\ UNCHANGED env /\
+  LET X == [S EXCEPT !.ui.ctimer = FALSE]
+  IN Go(X) \/ Go(CsSearch(X, [serial |-> ui.serial, input |-> ui.input]))
+
+\* The 300 ms kill timer runs exactly while the pending request's run is
+\* unkilled. kill() signals the run and keeps the request pending, so the
+\* rows read before the kill are still delivered.
+ContentKill == cs.req.serial # 0 /\ cs.run.serial = cs.req.serial /\ ~cs.run.killed /\
+  UNCHANGED env /\ Go([S EXCEPT !.cs.run.killed = TRUE])
+
+\* The run exits on its own or from a signal, its output is read, and
+\* finished() delivers it when it is the pending request's run, then
+\* starts a request that waited. The watchdog's forced finish is the same
+\* step.
+ContentExit == cs.run.serial # 0 /\ UNCHANGED env /\
+  LET r == [serial |-> cs.run.serial, input |-> cs.run.input]
+      current == cs.req.serial = cs.run.serial
+      X == [S EXCEPT !.cs.run = NoRun]
+      X1 == IF current THEN [X EXCEPT !.cs.req = NoCReq] ELSE X
+      X2 == IF current \/ ~ContentPendingCheck THEN UiContents(X1, r) ELSE X1
+  IN Go(CsStart(X2))
+
 Next ==
   \/ Show \/ Hide \/ PopToRoot \/ Edit \/ Activate \/ OpenPanel \/ CloseOverlay
   \/ CalcRevision \/ Reindex
   \/ HelperStart \/ HelperStep \/ Receive \/ Timeout \/ HelperExit
+  \/ ContentFire \/ ContentKill \/ ContentExit
 
 \* The helper and the timer make progress; the user may stop at any time.
 Spec == Init /\ [][Next]_vars
@@ -276,8 +369,20 @@ NoStaleOverwrite == ~gh.staleApply
 RepliesMatchCatalog == ~gh.badCatalog
 
 \* Whenever the launcher is visible and not waiting, its rows belong to the
-\* current input.
-SettledRowsAreCurrent == (ui.shown /\ ~ui.pending) => ui.rowsInput = ui.input
+\* current input, and so does a Contents section.
+SettledRowsAreCurrent == (ui.shown /\ ~ui.pending) =>
+  (ui.rowsInput = ui.input /\ ui.contentInput \in {NoInput, ui.input})
+
+\* A content reply for an older query never reaches the list.
+NoStaleContent == ~gh.staleContent
+
+\* A keystroke or view change kills the rg run: a run that has not been
+\* signalled belongs to the current search serial.
+ContentRunsAreCurrent == (cs.run.serial # 0 /\ ~cs.run.killed) => cs.run.serial = ui.serial
+
+\* A hide kills the rg run and stops the stillness timer, so no content
+\* search runs or starts while the launcher is hidden.
+HiddenRunsNoContent == ~ui.shown => (~ui.ctimer /\ (cs.run.serial = 0 \/ cs.run.killed))
 
 \* A search the visible launcher waits on always finishes (or the launcher
 \* hides): Enter never stays dead.

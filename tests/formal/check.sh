@@ -146,7 +146,8 @@ run() { tlc "$@"; local r=$?; (( r > result )) && result=$r; return 0; }
 
 case $mode in
   safety|all)
-    variant "$runs/safety.cfg" NoStaleActivation NoStaleOverwrite RepliesMatchCatalog SettledRowsAreCurrent
+    variant "$runs/safety.cfg" NoStaleActivation NoStaleOverwrite RepliesMatchCatalog SettledRowsAreCurrent \
+      NoStaleContent ContentRunsAreCurrent HiddenRunsNoContent
     run safety "$runs/safety.cfg"
     ;;&
   liveness|all)
@@ -182,6 +183,15 @@ send-before-load     SendOnlyWhenLoaded=FALSE  RepliesMatchCatalog
 # Reindex is guarded three times over; only all three gone lets a reply
 # computed on the old catalog through.
 reindex-unguarded    CancelOnReindex=FALSE,InvalidateCancels=FALSE,GuardRevision=FALSE  RepliesMatchCatalog
+# Content replies are guarded twice over: the view's serial check and
+# ContentSearch delivering only the pending request's run (which a rebuild
+# cancels). Each pair of holes lets a stale reply through.
+content-unguarded    ContentSerialCheck=FALSE,ContentPendingCheck=FALSE  NoStaleContent
+content-unguarded2   ContentSerialCheck=FALSE,ContentPendingCheck=FALSE  NoStaleActivation
+content-unguarded3   ContentSerialCheck=FALSE,ContentPendingCheck=FALSE  SettledRowsAreCurrent
+content-no-cancel    ContentSerialCheck=FALSE,CancelContentOnRebuild=FALSE  NoStaleContent
+no-content-cancel    CancelContentOnRebuild=FALSE  ContentRunsAreCurrent
+no-content-hide      CancelContentOnHide=FALSE     HiddenRunsNoContent
 MUTANTS
     ;;
 esac
