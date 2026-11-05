@@ -188,26 +188,37 @@ function countRows(listed, m) {
   return countIn(listed.text, m.lines)
 }
 
-function hit(row, matchBand, value) {
-  return { row: row, band: matchBand, score: value }
+// A band's hits as parallel arrays of numbers. Objects for thousands of hits
+// per keystroke made the search the likeliest place for the shell's
+// collector to run.
+function bucket() {
+  return { at: [], band: [], score: [] }
 }
 
-// Cuts a band at the room-th best score first, so only rows that can show
-// are sorted.
-function take(out, hits, max) {
+function add(b, r, matchBand, value) {
+  b.at.push(r)
+  b.band.push(matchBand)
+  b.score.push(value)
+}
+
+function byScore(a, b) {
+  return b.score - a.score || a.name.length - b.name.length || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+}
+
+// Cuts a band at the room-th best score first, so objects are built and
+// sorted only for rows that can show.
+function take(out, rows, b, max) {
   var room = max - out.length
-  if (room <= 0) return
-  if (hits.length > room) {
-    var cut = cutFor(hits.map(function(h) { return h.score }), room)
-    hits = hits.filter(function(h) { return h.score >= cut })
+  if (room <= 0 || !b.at.length) return
+  var cut = b.at.length > room ? cutFor(b.score, room) : -Infinity
+  var shown = []
+  for (var i = 0; i < b.at.length; i++) {
+    if (b.score[i] < cut) continue
+    var row = rows[b.at[i]]
+    shown.push({ path: row.path, name: row.name, dir: row.dir, band: b.band[i], score: b.score[i] })
   }
-  hits.sort(function(a, b) {
-    return b.score - a.score || a.row.name.length - b.row.name.length || (a.row.path < b.row.path ? -1 : a.row.path > b.row.path ? 1 : 0)
-  })
-  for (var i = 0; i < hits.length && out.length < max; i++) {
-    var row = hits[i].row
-    out.push({ path: row.path, name: row.name, dir: row.dir, band: hits[i].band, score: hits[i].score })
-  }
+  shown.sort(byScore)
+  for (var j = 0; j < shown.length && out.length < max; j++) out.push(shown[j])
 }
 
 // A file opened from omacast within its half-life moves up one band, but
@@ -220,7 +231,7 @@ function liftedBand(matchBand, opens) {
 // scores only the bands it shows.
 function rankWord(rows, listed, m, s, max) {
   var seen = new Uint8Array(rows.length)
-  var buckets = [[], [], [], [], []]
+  var buckets = [bucket(), bucket(), bucket(), bucket(), bucket()]
   Object.keys(s.opens).forEach(function(path) {
     var r = listed.byPath[path]
     if (r === undefined) return
@@ -228,7 +239,7 @@ function rankWord(rows, listed, m, s, max) {
     var effective = liftedBand(matchBand, s.opens[path])
     if (effective === matchBand) return
     seen[r] = 1
-    buckets[effective].push(hit(rows[r], matchBand, score(rows[r], s)))
+    add(buckets[effective], r, matchBand, score(rows[r], s))
   })
   // The prefix scan fills bands 0 and 1; scan i > 0 fills band i + 1, which
   // is then complete because its lifted rows are already in.
@@ -245,17 +256,13 @@ function rankWord(rows, listed, m, s, max) {
       if (seen[r]) return
       seen[r] = 1
       var matchBand = scan.band(rows[r])
-      buckets[matchBand].push(hit(rows[r], matchBand, score(rows[r], s)))
+      add(buckets[matchBand], r, matchBand, score(rows[r], s))
     })
-    for (var b = i === 0 ? 0 : i + 1; b <= i + 1; b++) take(out, buckets[b], max)
+    for (var b = i === 0 ? 0 : i + 1; b <= i + 1; b++) take(out, rows, buckets[b], max)
   })
   return { hits: countRows(listed, m), rows: out }
 }
 
-// Band 2 needs every word to start a word in the name, so the longest word's
-// scan finds its candidates. Band 6 needs the other words in the folder, so
-// the folders are filtered first: scanning for a one-letter last word made
-// band() run on 14,000 names (25 to 33 ms for "oma s").
 // The folders relative to home, one per line, built once per list like the
 // names.
 function joinedFolders(listed, home) {
@@ -277,8 +284,12 @@ function wordStartsAll(words, name) {
   return true
 }
 
+// Band 2 needs every word to start a word in the name, so the longest word's
+// scan finds its candidates. Band 6 needs the other words in the folder, so
+// the folders are filtered first: scanning for a one-letter last word made
+// band() run on 14,000 names (25 to 33 ms for "oma s").
 function rankWords(rows, listed, words, s, max) {
-  var buckets = [[], [], [], [], [], [], []]
+  var buckets = [bucket(), bucket(), bucket(), bucket(), bucket(), bucket(), bucket()]
   var seen = new Uint8Array(rows.length)
   var count = 0
   var longest = words.reduce(function(a, b) { return b.word.length > a.word.length ? b : a })
@@ -286,14 +297,14 @@ function rankWords(rows, listed, words, s, max) {
     if (!wordStartsAll(words, rows[r].name)) return
     seen[r] = 1
     count++
-    buckets[2].push(hit(rows[r], 2, score(rows[r], s)))
+    add(buckets[2], r, 2, score(rows[r], s))
   })
   var last = words[words.length - 1]
   var others = words.slice(1, -1)
   var folders = joinedFolders(listed, s.home)
   // A word start in the name covers exact and prefix too. Rows that cannot
   // show because band 2 already fills the limit are only counted.
-  var shown = buckets[2].length < max
+  var shown = buckets[2].at.length < max
   scanRows(folders, words[0].segmentLines, function(d) {
     for (var i = 0; i < others.length; i++) if (!others[i].segment.test(folders.rel[d])) return
     var inDir = listed.dirs[listed.dirList[d]]
@@ -301,11 +312,11 @@ function rankWords(rows, listed, words, s, max) {
       var r = inDir[j]
       if (seen[r] || !last.wordStart.test(rows[r].name)) continue
       count++
-      if (shown) buckets[liftedBand(6, s.opens[rows[r].path] || 0)].push(hit(rows[r], 6, score(rows[r], s)))
+      if (shown) add(buckets[liftedBand(6, s.opens[rows[r].path] || 0)], r, 6, score(rows[r], s))
     }
   })
   var out = []
-  buckets.forEach(function(hits) { if (out.length < max) take(out, hits, max) })
+  buckets.forEach(function(b) { take(out, rows, b, max) })
   return { hits: count, rows: out }
 }
 
@@ -367,13 +378,10 @@ function recent(rows, s, limit) {
     if (values[r] > 0) hits++
   }
   var cut = hits > max ? cutFor(values, max) : 0
-  var best = []
-  for (var i = 0; i < rows.length; i++) {
-    if (!(values[i] > 0) || values[i] < cut) continue
-    best.push(hit(rows[i], -1, values[i]))
-  }
+  var best = bucket()
+  for (var i = 0; i < rows.length; i++) if (values[i] > 0 && values[i] >= cut) add(best, i, -1, values[i])
   var out = []
-  take(out, best, max)
+  take(out, rows, best, max)
   s.recent = { rows: rows, max: max, result: { hits: hits, rows: out } }
   return s.recent.result
 }
