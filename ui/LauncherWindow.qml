@@ -379,7 +379,7 @@ PanelWindow {
     return r.ok ? r.data : []
   }
 
-  function perform(actionId, index) {
+  function perform(actionId, index, option) {
     if (window.searchPending) return
     if (index !== undefined && index >= 0) window.select(index)
     if (!window.selectedRow) return
@@ -390,7 +390,7 @@ PanelWindow {
       var missing = RootSearch.missingArgument(window.argDefs, window.argValues)
       if (missing >= 0) { window.argFocus = missing; return }
     }
-    window.request({ id: window.selectedRow.itemId, action: actionId, query: window.query, arguments: window.argValues })
+    window.request({ id: window.selectedRow.itemId, action: actionId, query: window.query, arguments: window.argValues, option: option })
   }
 
   function request(payload) {
@@ -413,9 +413,9 @@ PanelWindow {
   }
 
   function pick(optionId) {
-    var payload = Object.assign({}, window.picker.payload, { option: optionId })
+    var action = window.picker.payload.action
     window.picker = null
-    window.request(payload)
+    window.perform(action, undefined, optionId)
   }
 
   function confirmAlert() {

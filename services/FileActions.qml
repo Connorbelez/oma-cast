@@ -3,9 +3,6 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 
-// What the Search Files view does to a listed file besides opening it:
-// load its preview, show its folder, open it with another app and move it
-// to the Trash. Every process gets the file's own path, never typed text.
 Item {
   id: actions
 
@@ -37,8 +34,6 @@ Item {
     return path
   }
 
-  // ------------------------------------------------------------ preview
-
   function previewMode(name) {
     var dot = name.lastIndexOf(".")
     var ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : ""
@@ -53,8 +48,6 @@ Item {
     return mode === "image" || mode === "svg" ? actions.imageLimit : actions.textLimit
   }
 
-  // Output: "<size> <mtime>", one info line (file's description of an
-  // image, or whether pdftotext exists), then at most 64 KB of body.
   readonly property string previewScript: '[[ -f $1 ]] || exit 4; meta=$(stat -Lc "%s %Y" -- "$1") || exit 3; size=${meta%% *}; info=; case $2 in image) info=$(file -Lb -- "$1") ;; pdf) command -v pdftotext >/dev/null && info=pdftotext || info=none ;; esac; printf "%s\\n%s\\n" "$meta" "$info"; (( size <= $3 )) || exit 0; case $2 in text) exec head -c 65536 -- "$1" ;; svg) exec head -c 4096 -- "$1" ;; pdf) [[ $info = pdftotext ]] && pdftotext -l 1 -q -- "$1" - | head -c 65536 ;; esac; exit 0'
 
   function parsePreview(path, mode, output, limit) {
@@ -79,7 +72,7 @@ Item {
     if (mode === "pdf" && info !== "pdftotext") return base
     if (mode !== "text" && mode !== "pdf") return base
     if (/\u0000/.test(body) || (body.match(/\ufffd/g) || []).length > body.length / 20 + 1) return base
-    var lines = body.replace(/\ufffd$/, "").replace(/\n$/, "").split("\n")
+    var lines = (mode === "pdf" ? body.replace(/\f/g, "").replace(/\s+$/, "") : body.replace(/\ufffd$/, "").replace(/\n$/, "")).split("\n")
     base.kind = mode
     base.lines = Math.min(lines.length, actions.lineLimit)
     base.truncated = lines.length > actions.lineLimit || (mode === "text" && base.size > 65536)
@@ -162,8 +155,6 @@ Item {
       actions.previewDone()
     }
   }
-
-  // ------------------------------------------------------------ actions
 
   function showInFolder(path) {
     var dir = path.slice(0, path.lastIndexOf("/")) || "/"

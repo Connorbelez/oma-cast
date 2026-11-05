@@ -38,7 +38,6 @@ function tempDir(t) {
   return dir
 }
 
-// What the pane gets for a file: the preview script's output, parsed.
 function preview(file) {
   const actions = fileActions()
   const mode = actions.previewMode(path.basename(file))
@@ -207,5 +206,6 @@ test("a PDF shows its first page's text through pdftotext", { skip: !has("pdftot
   fs.writeFileSync(file, pdf("Hello from omacast"))
   const { result } = preview(file)
   assert.equal(result.kind, "pdf")
-  assert.match(result.text, /^Hello from omacast/)
+  assert.equal(result.text, "Hello from omacast")
+  assert.equal(result.lines, 1)
 })

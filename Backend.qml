@@ -713,7 +713,6 @@ Item {
         return backend.searchFiles(String(data && data.query || ""), limit)
       },
       open: function(data) { return backend.openFile(data && data.path) },
-      // The last preview the pane or this call loaded, or a load started now.
       preview: function(data) {
         var path = fileActions.listedPath(data && data.path, fileLister.rows)
         if (backend.lastPreview && backend.lastPreview.path === path) return backend.lastPreview

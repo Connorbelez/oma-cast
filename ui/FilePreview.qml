@@ -1,10 +1,8 @@
 import QtQuick
 import qs.Commons
 
-// The Search Files detail pane (ref 04 §2.4 master-detail): the file's
-// image, the head of its text or the first page of a PDF, and its metadata.
 // `preview` is FileActions.parsePreview's result for the selected row, or
-// null while it loads; the name and folder come from the row at once.
+// null while it loads.
 Rectangle {
   id: pane
 
