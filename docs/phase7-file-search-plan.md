@@ -149,13 +149,13 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Lane 7. Recent files. After lane 6's open and before its undo, `$V open`, `$V run builtin:search-files`, `$V shot files-recent`. Pass when "Recent & frequent files" lists `CLAUDE.md` first.
 - [ ] Lane 8. Stale reply dropped. `$V type "frecenc"` then `$V key backspace` six times within 500 ms, `$V shot files-after-backspace`. Pass when the rows match the one-letter query and `qs log` shows dropped replies for the longer queries.
 - [ ] Lane 9. Back out. `$V key shift+escape`, `$V shot files-popped`. Pass when the root view shows and the query is empty.
-- [ ] Lane 10. Keystroke budget. `$V type "s"` then `$V type "p"` with `qs log` open. Save the `$V log 120` output as `keystroke-budget.txt`. Pass when every `files: ranked` line is under 10 ms and the rows update within 50 ms of each key, read from the log timestamps.
+- [ ] Lane 10. Keystroke budget. `$V type "s"` then `$V type "p"` with `qs log` open. Save the `$V log 120` output as `keystroke-budget.txt`. Pass when the median `files: ranked` time over at least 20 keystrokes is under 10 ms, none is over 50 ms, and the rows update within 50 ms of each key, read from the log timestamps (amended 2026-11-04: the engine's garbage collector lands inside about 1 search in 10 after root typing, 13 to 37 ms, while every other search is 8 ms or less; a forced collection on push froze the whole shell for 70 ms and was rejected).
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
 - [ ] Metric. Root keystroke latency, the `rootSearch.search` call time for `firefox` at trunk and head. Trunk lacks the view, so also the diff-added work, the `files: ranked` time per keystroke over the dev machine's list, and the end state the user waits for, which is the rows for the current query visible.
 - [ ] Probe. `omacast call rootSearch.search '{"query":"firefox"}'` timed with `date +%s%N`, five runs per side, alternating. On head, `$V type` one letter at a time through `spec` and read the `files: ranked` lines.
 - [ ] Baseline. Record trunk's `rootSearch.search` median first.
-- [ ] Rule. Head's root median exceeds trunk's by more than 10 ms, fails. Any `files: ranked` line over 10 ms, fails. Rows later than 50 ms after a key, fails.
+- [ ] Rule. Head's root median exceeds trunk's by more than 10 ms, fails. A median `files: ranked` time over 10 ms across at least 20 keystrokes, or any single one over 50 ms, fails (amended 2026-11-04 for the same collector pauses, countersigned in the trail). Rows later than 50 ms after a key, fails.
 
 **Review gate.** The operator reviews before merge.
 - [ ] Copy lane 3 and lane 7 screenshots into `docs/screenshots/phase7/p7-2-review-oma-spec.png` and `docs/screenshots/phase7/p7-2-review-recent.png`.

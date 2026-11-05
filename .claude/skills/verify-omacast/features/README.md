@@ -34,4 +34,4 @@ Each feature file has an H1 title and one paragraph, then exactly four H2s in th
 - [Calculator](./calculator.md): the inline answer card, copy with HUD, Calculator History.
 - [Action panel](./action-panel.md): Ctrl+K, filtering, favourites and their persistence.
 - [Navigation](./navigation.md): pushed Omarchy submenus, back, Shift+Esc to root.
-- [File search](./file-search.md): the file list, large untouched subtrees and their toast, the `files.*` RPCs, doctor lines (P7-1; the view, ranking and content results land with later PRs).
+- [File search](./file-search.md): the file list, large untouched subtrees and their toast, the `files.*` RPCs, doctor lines (P7-1 and P7-2; the preview pane, the root Files section and content results land with P7-3 to P7-5).
