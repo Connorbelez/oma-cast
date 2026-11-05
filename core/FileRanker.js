@@ -291,15 +291,17 @@ function rankWords(rows, listed, words, s, max) {
   var last = words[words.length - 1]
   var others = words.slice(1, -1)
   var folders = joinedFolders(listed, s.home)
+  // A word start in the name covers exact and prefix too. Rows that cannot
+  // show because band 2 already fills the limit are only counted.
+  var shown = buckets[2].length < max
   scanRows(folders, words[0].segmentLines, function(d) {
     for (var i = 0; i < others.length; i++) if (!others[i].segment.test(folders.rel[d])) return
     var inDir = listed.dirs[listed.dirList[d]]
     for (var j = 0; j < inDir.length; j++) {
       var r = inDir[j]
-      var nb = seen[r] ? -1 : nameBand(last, rows[r].name)
-      if (nb < 0 || nb > 2) continue
+      if (seen[r] || !last.wordStart.test(rows[r].name)) continue
       count++
-      buckets[liftedBand(6, s.opens[rows[r].path] || 0)].push(hit(rows[r], 6, score(rows[r], s)))
+      if (shown) buckets[liftedBand(6, s.opens[rows[r].path] || 0)].push(hit(rows[r], 6, score(rows[r], s)))
     }
   })
   var out = []
