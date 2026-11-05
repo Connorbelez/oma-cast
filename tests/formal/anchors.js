@@ -112,6 +112,8 @@ const SHAPES = [
     [/^  function applyContents\(reply\) \{\s*\n\s*if \(reply\.serial !== window\.searchSerial\) return\n\s*if \(window\.layerOpen\) \{ window\.contents\.held = reply; return \}\n/]],
   ["applyHeld waits for every layer to close and clears the held reply before applying it", LW, "  function applyHeld(",
     [/if \(!reply \|\| window\.layerOpen\) return\n\s*window\.contents\.held = null\n\s*window\.applyContents\(reply\)/]],
+  ["closing the last layer with a reply held calls applyHeld", LW, "  onLayerOpenChanged:",
+    [/^  onLayerOpenChanged: if \(!window\.layerOpen && window\.contents\.held\) Qt\.callLater\(window\.applyHeld\)$/]],
   ["Backend.cancelContents is ContentSearch.cancel", BE, "  function cancelContents(", [/^  function cancelContents\(\) \{ return contentSearch\.cancel\(\) \}$/]],
   ["rebuild restarts the stillness timer only in the files view for a new record, after any cancel and before the synchronous search", LW, "  function rebuild(",
     [/if \(window\.filesView && !kept\) \{\n(?:      [^\n]*\n)*?      contentDelay\.restart\(\)\n    \}\n    window\.backend\.searchAsync\(/, /contentDelay\.restart\(\)(?![\s\S]*window\.cancelContents\(\))/]],
@@ -164,6 +166,9 @@ function check() {
     problems.push(`shape "contentDelay is the only caller of searchContents()": the contentDelay Timer in ${LW} changed`)
   const contentCalls = (lw.match(/window\.searchContents\(/g) || []).length
   if (contentCalls !== 1) problems.push(`shape "contentDelay is the only caller of searchContents()": found ${contentCalls} calls to window.searchContents( in ${LW}, expected 1`)
+  const layers = (lw.match(/^  readonly property bool layerOpen: (.*)$/m) || [null, ""])[1].split(" || ").sort().join(" || ")
+  if (layers !== "!!window.alert || !!window.picker || window.aboutOpen || window.actionPanelOpen || window.quickLook")
+    problems.push(`shape "layerOpen is true while the action panel, the picker, an alert, Quick Look or the About panel is open": the layerOpen binding in ${LW} changed`)
   const cs = read(CS)
   if (!/id: killTimer\s*interval: service\.killAfterMs\s*onTriggered: service\.kill\(\)/.test(cs))
     problems.push(`shape "the kill timer calls kill()": the killTimer in ${CS} changed`)
