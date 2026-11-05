@@ -63,10 +63,10 @@ Item {
     base.mtime = Number(meta[1])
     if (base.size > limit) return base
     if (mode === "image" || mode === "svg") {
-      var dims = mode === "image" ? info.match(/(\d+)\s*x\s*(\d+)/) : actions.svgSize(body)
+      var dims = mode === "image" ? actions.imageSize(info) : actions.svgSize(body)
       base.kind = "image"
       base.imageSource = "file://" + path.split("/").map(encodeURIComponent).join("/")
-      if (dims) { base.width = Number(dims[1]); base.height = Number(dims[2]) }
+      if (dims) { base.width = dims.width; base.height = dims.height }
       return base
     }
     if (mode === "pdf" && info !== "pdftotext") return base
@@ -80,13 +80,27 @@ Item {
     return base
   }
 
+  // `file -Lb` prints a JFIF density and a BMP resolution in the same WxH
+  // form as the pixel size, and TIFF only as width= and height=.
+  function imageSize(info) {
+    var size = null
+    info.replace(/(density |resolution )?(\d+) ?x ?(\d+)/g, function(all, label, w, h) {
+      if (!label) size = { width: Number(w), height: Number(h) }
+      return all
+    })
+    if (size) return size
+    var w = info.match(/\bwidth=(\d+)/)
+    var h = info.match(/\bheight=(\d+)/)
+    return w && h ? { width: Number(w[1]), height: Number(h[1]) } : null
+  }
+
   function svgSize(head) {
     var tag = (head.match(/<svg\b[^>]*>/) || [""])[0]
     var w = tag.match(/\swidth="([\d.]+)(px)?"/)
     var h = tag.match(/\sheight="([\d.]+)(px)?"/)
-    if (w && h) return [tag, Math.round(Number(w[1])), Math.round(Number(h[1]))]
+    if (w && h) return { width: Math.round(Number(w[1])), height: Math.round(Number(h[1])) }
     var box = tag.match(/viewBox="[\d.\s-]*?([\d.]+)[\s,]+([\d.]+)"/)
-    return box ? [tag, Math.round(Number(box[1])), Math.round(Number(box[2]))] : null
+    return box ? { width: Math.round(Number(box[1])), height: Math.round(Number(box[2])) } : null
   }
 
   property var queued: null

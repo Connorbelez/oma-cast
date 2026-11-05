@@ -23,7 +23,7 @@ function fileActions() {
   const actions = {}
   for (const name of ["textLimit", "imageLimit", "lineLimit"]) actions[name] = Number(source.match(new RegExp("property int " + name + ": (\\d+)"))[1])
   const context = vm.createContext({ actions })
-  for (const name of ["listedPath", "trashPath", "previewMode", "limitFor", "parsePreview", "svgSize"]) {
+  for (const name of ["listedPath", "trashPath", "previewMode", "limitFor", "parsePreview", "imageSize", "svgSize"]) {
     const start = source.indexOf("\n  function " + name + "(")
     assert.ok(start >= 0, name)
     const end = source.indexOf("\n  }\n", start)
@@ -180,6 +180,27 @@ test("an image reports its dimensions and a file URL Qt can load", { skip: !has(
   const svg = path.join(dir, "logo.svg")
   fs.writeFileSync(svg, '<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 32"><rect width="4" height="4"/></svg>\n')
   assert.deepEqual((({ kind, width, height }) => ({ kind, width, height }))(preview(svg).result), { kind: "image", width: 48, height: 32 })
+})
+
+// Lines from `file -Lb`. JFIF prints its density before the pixel size,
+// and a BMP its bit depth after it.
+test("an image's dimensions come from its pixel size in file's output, never its density", () => {
+  const actions = fileActions()
+  const size = (info) => (({ width, height }) => ({ width, height }))(actions.parsePreview("/home/u/a.jpg", "image", "1000 1700000000\n" + info + "\n", actions.imageLimit))
+  const cases = [
+    ["JPEG image data, JFIF standard 1.01, aspect ratio, density 96x96, segment length 16, baseline, precision 8, 5120x2880, components 3", 5120, 2880],
+    ["JPEG image data, JFIF standard 1.01, aspect ratio, density 1x1, segment length 16, baseline, precision 8, 4000x3000, components 3", 4000, 3000],
+    ["JPEG image data, JFIF standard 1.01, resolution (DPI), density 300x300, segment length 16, baseline, precision 8, 640x480, components 3", 640, 480],
+    ["JPEG image data, Exif standard: [TIFF image data, big-endian, direntries=12, height=3000, bps=0, PhotometricInterpretation=RGB, orientation=upper-left, width=4000], baseline, precision 8, 4000x3000, components 3", 4000, 3000],
+    ["PNG image data, 1712 x 1158, 8-bit/color RGBA, non-interlaced", 1712, 1158],
+    ["GIF image data, version 89a, 640 x 480", 640, 480],
+    ["PC bitmap, Windows 3.x format, 100 x 100 x 24, image size 30000, resolution 2835 x 2835 px/m, cbSize 30054, bits offset 54", 100, 100],
+    ["RIFF (little-endian) data, Web/P image, VP8 encoding, 640x480, Scaling: [none]x[none], YUV color, decoders should clamp", 640, 480],
+    ["TIFF image data, little-endian, direntries=15, width=640, height=480, bps=8386, compression=none, PhotometricInterpretation=RGB, orientation=upper-left", 640, 480],
+    ["TIFF image data, big-endian, direntries=14, height=300, bps=8, compression=none, width=200", 200, 300]
+  ]
+  for (const [info, width, height] of cases) assert.deepEqual(size(info), { width, height }, info)
+  assert.deepEqual(size("JPEG image data"), { width: undefined, height: undefined })
 })
 
 function pdf(text) {
