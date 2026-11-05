@@ -36,6 +36,7 @@ function compile(query) {
       wordStartLines: new RegExp("[-_. ]" + e + "[^\\n]*", "gi"),
       substringLines: new RegExp(e + "[^\\n]*", "gi"),
       lines: new RegExp(subsequenceSource(word, "\\n") + "[^\\n]*", "gi"),
+      without: word.length === 1 ? new RegExp("^[^" + e + "\\n]+$", "gim") : null,
       segment: new RegExp("(?:^|/)(?:[^/]*[-_. ])?" + e, "i")
     }
   })
@@ -126,7 +127,7 @@ function score(row, s) {
   return (opens ? Math.log(1 + opens / LIFT_OPENS) : 0) + 0.5 * recency(row, s) + 0.5 * prior(row.dir, s)
 }
 
-var joined = { rows: null, text: "", starts: [], byPath: null }
+var joined = { rows: null, text: "", starts: [], byPath: null, sample: "", sampled: 0 }
 
 // Every name on its own line, built once per list. A native scan of this
 // text finds matching names several times faster in Qt's engine than one
@@ -141,7 +142,11 @@ function joinedNames(rows) {
     byPath[rows[r].path] = r
     at += rows[r].name.length + 1
   }
-  joined = { rows: rows, text: rows.map(function(row) { return row.name }).join("\n"), starts: starts, byPath: byPath }
+  var sample = rows.filter(function(row, i) { return i % 16 === 0 })
+  joined = {
+    rows: rows, text: rows.map(function(row) { return row.name }).join("\n"), starts: starts, byPath: byPath,
+    sample: sample.map(function(row) { return row.name }).join("\n"), sampled: sample.length
+  }
   return joined
 }
 
@@ -160,11 +165,18 @@ function scanRows(listed, regex, visit) {
 
 // Two replaces counted faster, but each built a string the size of the list
 // and 420 live calls saw twice as many collection pauses.
-function countRows(listed, regex) {
+function countIn(text, regex) {
   var n = 0
   regex.lastIndex = 0
-  while (regex.test(listed.text)) n++
+  while (regex.test(text)) n++
   return n
+}
+
+// Most names hold a common letter, so when a sample of every 16th name says
+// so, the names without it are fewer to count.
+function countRows(listed, m) {
+  if (m.without && 2 * countIn(listed.sample, m.lines) > listed.sampled) return listed.starts.length - countIn(listed.text, m.without)
+  return countIn(listed.text, m.lines)
 }
 
 function hit(row, matchBand, value) {
@@ -228,7 +240,7 @@ function rankWord(rows, listed, m, s, max) {
     })
     for (var b = i === 0 ? 0 : i + 1; b <= i + 1; b++) take(out, buckets[b], max)
   })
-  return { hits: countRows(listed, m.lines), rows: out }
+  return { hits: countRows(listed, m), rows: out }
 }
 
 function rankWords(rows, listed, words, s, max) {
