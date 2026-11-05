@@ -599,6 +599,7 @@ An empty query in Search Files shows "Recent & frequent files", ranked by usage 
 
 **Where it shows [D].**
 - **Search Files** command: master-detail list, preview pane (image, text head, PDF first page via `pdftotext` when present), Open, Show in Folder (`xdg-open` on the parent), Open With…, Copy Path, Move to Trash (freedesktop Trash spec), Quick Look on Ctrl+Y as a larger preview.
+  - How P7-3 builds it [D, 2026-11-04]. Move to Trash runs `gio trash -- <path>` (glib2, an Omarchy base package), which writes the Trash spec's `.trashinfo` and handles other mounts, and takes only a listed file under the home dir. The pane reads through one fixed script (`stat`, `file -Lb` for image dimensions, `head -c 65536`, `pdftotext -l 1`), because Quickshell's `FileView` has no byte limit and would read a 1 MB file whole. Text and PDFs over 1 MB show metadata only, as planned; images get 20 MB, because Qt decodes them off the GUI thread and a phone photo is often over 1 MB.
 - **Root search**: a Files section after Results and before the fallbacks, with at most 3 rows [I], shown for path-like queries (`~/`, `/`) and for queries of at least 3 characters that have file-name matches.
 
 **Upgrade triggers for a persistent index [D].** Take the index route (an in-memory tree saved to `~/.cache/omacast` as 0600, inotify on hot subtrees, folder-mtime rechecks elsewhere) only when one of these is measured:
