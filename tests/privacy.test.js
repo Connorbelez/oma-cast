@@ -303,3 +303,26 @@ test("every process that walks the home dir starts in it, under timeout", () => 
     assert.match(b, /\n    command: \["timeout", "-k", "2", "(15|60)", "bash", "-c", /, b.split("\n")[1])
   }
 })
+
+// File actions: every process gets the file's own path from a listed row,
+// fixed flags and constant scripts, never the query.
+const FILE_ACTION_ARGS = {
+  "actions.previewScript": "a constant script",
+  "previewRun.path": "a listed file (FileActions.listedPath)",
+  "previewRun.mode": "a preview mode from the file's extension",
+  "previewRun.limit": "a constant byte limit",
+  "trashRun.path": "a listed file under the home dir (FileActions.trashPath)",
+  "dir": "a listed file's folder",
+  "desktopId": "an installed app's desktop id",
+  "path": "a listed file"
+}
+
+test("every process FileActions starts has fixed argv", () => {
+  const source = fs.readFileSync(path.join(root, "services/FileActions.qml"), "utf8")
+  const argvs = [...source.matchAll(/(?:command:\s*|execArgv\()\[([^\]]*)\]/g)].map((m) => m[1].split(",").map((s) => s.trim()))
+  assert.equal(argvs.length, 4)
+  for (const argv of argvs) {
+    for (const arg of argv) assert.ok(/^"[^"$`\\]*"$/.test(arg) || arg in FILE_ACTION_ARGS, `${arg} in [${argv}]`)
+  }
+  assert.doesNotMatch(source, /execDetached|command:(?!\s*\[)|\.command\s*=/)
+})
