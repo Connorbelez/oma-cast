@@ -201,6 +201,7 @@ PanelWindow {
     if (window.view.kind === "alias") { Rows.update(rows, []); window.select(-1); return }
     window.searchPending = true
     var revision = window.backend.candidatesRevision
+    var startedAt = Date.now()
     window.backend.searchAsync({ query: window.query, view: window.view, filter: window.atRoot ? window.rootFilter : "all" }, function(result) {
       if (serial !== window.searchSerial || revision !== window.backend.candidatesRevision) {
         window.backend.log("info", "search", "dropped a reply for an older query")
@@ -208,6 +209,7 @@ PanelWindow {
       }
       window.applySearch(result, keepId, restoreIndex)
       window.searchPending = false
+      window.backend.log("debug", "search", "rows in " + (Date.now() - startedAt) + " ms")
     })
   }
 
@@ -375,7 +377,7 @@ PanelWindow {
 
   function actionsForSelected() {
     if (window.searchPending || !window.selectedRow) return []
-    var r = window.backend.callSync("rootSearch.getActions", { id: window.selectedRow.itemId })
+    var r = window.backend.callSync("rootSearch.getActions", { id: window.selectedRow.itemId, view: window.view.kind })
     return r.ok ? r.data : []
   }
 

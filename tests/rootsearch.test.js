@@ -203,3 +203,120 @@ test("search files finds the Search Files command, which pushes the files view",
   const top = results("search files")[0].rows[0].candidate
   assert.deepEqual([top.id, top.title, top.run], ["builtin:search-files", "Search Files", { push: { kind: "files", title: "Search Files" } }])
 })
+
+const FileRanker = require("../core/FileRanker.js")
+const HOME = "/home/u"
+const hit = (path, band) => ({
+  id: "file:" + path, path, title: path.slice(path.lastIndexOf("/") + 1),
+  subtitle: "~" + path.slice(HOME.length, path.lastIndexOf("/")), band
+})
+const SPEC_HITS = [
+  hit(HOME + "/Projects/oma-cast/SPEC.md", 0),
+  hit(HOME + "/Work/tries/SPEC.md", 0),
+  hit(HOME + "/Applications/qt/SpectrumCycling.ui", 1),
+  hit(HOME + "/Documents/inspector.txt", 3),
+  hit(HOME + "/Documents/s-p-e-c.txt", 4)
+]
+const sectionIds = (sections) => sections.map((s) => s.id)
+const rowIds = (section) => section.rows.map((r) => r.candidate.id)
+const withFiles = (query, hits, extra) => RS.rootSections(candidates(), query, ctx(Object.assign({ fileHits: hits }, extra)), deps)
+
+test("root files: the Files section sits after Results and before the fallbacks", () => {
+  assert.deepEqual(sectionIds(withFiles("files", SPEC_HITS)), ["results", "files", "fallback-commands"])
+  assert.equal(withFiles("files", SPEC_HITS)[1].title, "Files")
+})
+
+test("root files: at most 3 rows, in the order the file ranker gave", () => {
+  const files = withFiles("spec", SPEC_HITS).find((s) => s.id === "files")
+  assert.deepEqual(rowIds(files), [
+    "file:/home/u/Projects/oma-cast/SPEC.md", "file:/home/u/Work/tries/SPEC.md", "file:/home/u/Applications/qt/SpectrumCycling.ui"
+  ])
+})
+
+test("root files: a file row is the files view's row", () => {
+  const row = withFiles("spec", SPEC_HITS).find((s) => s.id === "files").rows[0].candidate
+  assert.deepEqual(
+    { id: row.id, kind: row.kind, type: row.type, title: row.title, subtitle: row.subtitle, glyph: row.glyph },
+    { id: "file:/home/u/Projects/oma-cast/SPEC.md", kind: "file", type: "file", title: "SPEC.md", subtitle: "~/Projects/oma-cast", glyph: "" }
+  )
+})
+
+test("root files: queries under 3 characters and the empty root never show files", () => {
+  assert.deepEqual(sectionIds(withFiles("sp", SPEC_HITS)), ["fallback-commands"])
+  assert.deepEqual(sectionIds(withFiles("s", SPEC_HITS)), ["results", "fallback-commands"])
+  assert.ok(!sectionIds(withFiles("", SPEC_HITS)).includes("files"))
+  assert.equal(RS.fileQuery("sp", ctx()), "")
+  assert.equal(RS.fileQuery("  sp  ", ctx()), "")
+  assert.equal(RS.fileQuery("", ctx()), "")
+  assert.equal(RS.fileQuery("spe", ctx()), "name")
+})
+
+test("root files: only name-band and path-band hits count", () => {
+  const typoOnly = [hit(HOME + "/a/spce.md", 5), hit(HOME + "/a/recent.md", -1)]
+  assert.deepEqual(sectionIds(withFiles("spec", typoOnly)), ["fallback-commands"])
+  const pathBand = [hit(HOME + "/Projects/oma-cast/SPEC.md", 6), hit(HOME + "/a/spce.md", 5)]
+  assert.deepEqual(rowIds(withFiles("oma spec", pathBand).find((s) => s.id === "files")), ["file:/home/u/Projects/oma-cast/SPEC.md"])
+})
+
+test("root files: a path-like query shows the Files section alone, even under 3 characters", () => {
+  const hits = [hit(HOME + "/Projects/oma-cast/SPEC.md", 6)]
+  assert.deepEqual(sectionIds(withFiles("~/Pro", hits)), ["files"])
+  assert.deepEqual(sectionIds(withFiles("/h", hits)), ["files"])
+  assert.equal(RS.fileQuery("~/", ctx()), "path")
+  assert.equal(RS.fileQuery("/", ctx()), "path")
+  assert.equal(RS.fileQuery("~x", ctx()), "")
+})
+
+test("root files: a path-like query with no files falls back to the usual sections", () => {
+  assert.deepEqual(sectionIds(withFiles("~/zzz", [])), ["fallback-commands"])
+})
+
+test("root files: an exact alias keeps the top and hides the files", () => {
+  const extra = { commands: { "builtin:calculator-history": { alias: "spec" } } }
+  const sections = withFiles("spec", SPEC_HITS, extra)
+  assert.deepEqual(sectionIds(sections), ["results", "fallback-commands"])
+  assert.equal(rowIds(sections[0])[0], "builtin:calculator-history")
+  assert.equal(RS.fileQuery("SPEC", ctx(extra)), "")
+  assert.equal(RS.fileQuery("spe", ctx(extra)), "name", "an alias prefix does not hide them")
+  const disabled = { commands: { "builtin:calculator-history": { alias: "spec", enabled: false } } }
+  assert.equal(RS.fileQuery("spec", ctx(disabled)), "name", "a disabled command's alias does not either")
+  const gone = { commands: { "app:gone": { alias: "spec" } } }
+  assert.equal(RS.fileQuery("spec", ctx(gone), candidates()), "name", "an alias left by a removed command does not either")
+  assert.deepEqual(sectionIds(withFiles("spec", SPEC_HITS, gone)), ["files", "fallback-commands"], "the stale alias hides nothing and matches no row")
+})
+
+test("root files: the Applications and Commands filters leave files out", () => {
+  assert.ok(!sectionIds(withFiles("files", SPEC_HITS, { filter: "applications" })).includes("files"))
+  assert.equal(RS.fileQuery("spec", ctx({ filter: "commands" })), "")
+})
+
+const fileRow = (p) => {
+  const at = p.lastIndexOf("/")
+  return { path: HOME + "/" + p, name: p.slice(at + 1), dir: at < 0 ? HOME : HOME + "/" + p.slice(0, at) }
+}
+const listed = [
+  "Projects/oma-cast/SPEC.md", "Projects/oma-cast/core/RootSearch.js", "Projects/oma-cast/node_modules/x/deep/index.js",
+  "Programs/tool.txt", "profile.txt", "Documents/Projects.md", "Work/tries/SPEC.md"
+].map(fileRow)
+const pathSignals = () => FileRanker.signals("40 " + HOME + "/Projects/oma-cast\n", {}, HOME, NOW)
+const pathsOf = (result) => result.rows.map((r) => r.path.slice(HOME.length + 1))
+
+test("root files: a path query lists the files under it, busiest folder first, case-insensitively", () => {
+  const result = RS.pathHits(listed, "~/pro", pathSignals(), 3, FileRanker)
+  assert.equal(result.hits, 5)
+  assert.deepEqual(pathsOf(result), ["Projects/oma-cast/SPEC.md", "Projects/oma-cast/core/RootSearch.js", "Projects/oma-cast/node_modules/x/deep/index.js"])
+  assert.ok(result.rows.every((r) => r.band === 6))
+})
+
+test("root files: equal usage scores break on the shorter path, not the alphabet", () => {
+  const rows = ["Projects/oma-cast/zz.md", "Projects/oma-cast/aaa/bbb.md"].map(fileRow)
+  const noUsage = FileRanker.signals("", {}, HOME, NOW)
+  assert.deepEqual(pathsOf(RS.pathHits(rows, "~/pro", noUsage, 3, FileRanker)), ["Projects/oma-cast/zz.md", "Projects/oma-cast/aaa/bbb.md"])
+})
+
+test("root files: a path query narrows to a file name and takes an absolute path", () => {
+  assert.deepEqual(pathsOf(RS.pathHits(listed, "~/Projects/oma-cast/sp", pathSignals(), 3, FileRanker)), ["Projects/oma-cast/SPEC.md"])
+  assert.deepEqual(pathsOf(RS.pathHits(listed, HOME + "/Work/", pathSignals(), 3, FileRanker)), ["Work/tries/SPEC.md"])
+  assert.equal(RS.pathHits(listed, "~/Projects/oma-cast/.*", pathSignals(), 3, FileRanker).hits, 0, "the query is text, not a pattern")
+  assert.equal(RS.pathHits(listed, "~/nothing", pathSignals(), 3, FileRanker).rows.length, 0)
+})

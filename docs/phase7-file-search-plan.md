@@ -245,12 +245,12 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 
 **Verify, live.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked. Ten lanes on the `swarm workers` role in `p3-models.md` at the PR head, per the boot recipe.
 - [ ] Lane 1. Regression lane against trunk. At trunk and head, `$V open`, `$V key ctrl+u`, `$V type "firefox"`, `$V shot root-firefox`. Pass when the Results rows are identical on both sides and the Files section on head holds at most 3 rows below them.
-- [ ] Lane 2. Section order. `$V type "spec"`, `$V shot root-spec`. Pass when the sections read Results, Files, "Use "spec" with…" top to bottom.
+- [ ] Lane 2. Section order. `$V type "spec"`, `$V key ctrl+down` until the Files section is on screen (Results holds about 27 rows for `spec`), `$V shot root-spec`. Pass when the sections read Results, Files, "Use "spec" with…" top to bottom.
 - [ ] Lane 3. Two characters. `$V type "sp"`, `$V shot root-sp`. Pass when no Files section shows.
 - [ ] Lane 4. Path-like. `$V type "~/Pro"`, `$V shot root-path`. Pass when only the Files section shows and its first row is under `~/Projects`.
-- [ ] Lane 5. Open from root. `$V type "claude"`, `$V key ctrl+2` on the Files row if Results has rows, else `$V key enter`, `$V shot root-open-hud`. Pass when the HUD names `CLAUDE.md` and the launcher hides. Undo the frecency record.
+- [ ] Lane 5. Open from root. `$V type "claude"`, `$V key ctrl+down` to the Files section (Ctrl+2 lands on Results' second row when Results has two rows), `$V key enter`, `$V shot root-open-hud`. Pass when the HUD names `CLAUDE.md` and the launcher hides. Undo the frecency record.
 - [ ] Lane 6. Alias keeps the top. Set an alias `spec` on Calculator History, `$V type "spec"`, `$V shot root-alias`. Pass when the alias row is first and no Files section shows. Remove the alias.
-- [ ] Lane 7. Stale reply. `$V type "frecenc"` then six `$V key backspace` within 500 ms, `$V shot root-after-backspace`. Pass when the rows belong to `f` and `qs log` shows dropped replies.
+- [ ] Lane 7. Stale reply. `$V type "frecenc"` then six `$V key backspace` within 500 ms, `$V shot root-after-backspace`. Pass when the rows belong to `f` and either `qs log` shows dropped replies (with the flea helper built) or every query logged once in key order with no stale rows applied (without the helper, every reply returns in the same task and nothing can be late; amended 2026-11-04).
 - [ ] Lane 8. Hide during search. `$V type "spec"` then `$V hide` within 20 ms, `$V open`. Save the `$V log 120` output as `hide-during-search.txt`. Pass when the rows shown belong to the surviving query and no QML error is logged.
 - [ ] Lane 9. Compact mode. With `compact` on, `$V open`, `$V type "spec"`, `$V shot root-compact`. Pass when the Files section appears without breaking the compact layout.
 - [ ] Lane 10. Zoom. `$V key ctrl+plus` twice, `$V type "spec"`, `$V shot root-zoomed`, `$V key ctrl+0`. Pass when file rows scale with the others.
@@ -259,7 +259,7 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Metric. Root keystroke latency, the `rootSearch.search` call time and the key-to-rows time for `spec` at trunk and head. Both sides produce it.
 - [ ] Probe. `omacast call rootSearch.search '{"query":"spec"}'` timed five times per side, alternating trunk and head, and `$V type` through `spec` one letter at a time with `qs log` timestamps.
 - [ ] Baseline. Record trunk's median first.
-- [ ] Rule. Head's median exceeds trunk's by more than 10 ms, fails. Key-to-rows over 50 ms on head, fails.
+- [ ] Rule. Head's median exceeds trunk's by more than 10 ms, fails. A key-to-rows median over 50 ms on head, or a single run slower than trunk's slowest by more than 10 ms, fails (amended 2026-11-04: one run in five paused about 127 ms on trunk and head alike, the engine's collector, so a single-run ceiling would fail trunk too; countersigned in the trail).
 
 **Review gate.** The operator reviews before merge.
 - [ ] Copy lane 2 and lane 4 screenshots into `docs/screenshots/phase7/p7-4-review-section.png` and `docs/screenshots/phase7/p7-4-review-path.png`.

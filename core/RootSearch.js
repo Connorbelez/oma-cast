@@ -285,6 +285,87 @@ function passesFilter(candidate, filter) {
   return (candidate.type === "application") === (filter === "applications")
 }
 
+// The root's Files section (SPEC §8.6 "Where it shows"): a few rows from
+// the file ranker between Results and the fallbacks.
+var ROOT_FILES_LIMIT = 3
+var ROOT_FILES_MIN_LENGTH = 3
+
+function isPathQuery(q) {
+  return q.charAt(0) === "/" || q.indexOf("~/") === 0
+}
+
+function hasExactAlias(q, ctx, candidates) {
+  var lower = q.toLowerCase()
+  for (var id in ctx.commands || {}) {
+    var s = ctx.commands[id]
+    if (!s || !s.alias || s.enabled === false || String(s.alias).toLowerCase() !== lower) continue
+    if (!candidates || candidates.some(function(c) { return c.id === id })) return true
+  }
+  return false
+}
+
+// "path" for a query typed as a path, "name" for one long enough to match
+// file names, "" when the root shows no files. Backend ranks files only for
+// a non-empty answer, so the empty root and short queries cost nothing.
+function fileQuery(query, ctx, candidates) {
+  var q = String(query || "").trim()
+  if (!q || (ctx.filter && ctx.filter !== "all") || hasExactAlias(q, ctx, candidates)) return ""
+  if (isPathQuery(q)) return "path"
+  return q.length >= ROOT_FILES_MIN_LENGTH ? "name" : ""
+}
+
+function fileCandidate(hit) {
+  return { id: hit.id, type: "file", kind: "file", title: hit.title, subtitle: hit.subtitle, path: hit.path, glyph: "\uf15b", rootSearch: { when: "always" } }
+}
+
+function isNameBand(band) {
+  return (band >= 0 && band <= 4) || band === 6
+}
+
+function fileRows(hits, kind) {
+  var shown = kind === "path" ? hits : hits.filter(function(h) { return isNameBand(h.band) })
+  return shown.slice(0, ROOT_FILES_LIMIT).map(function(h) { return { candidate: fileCandidate(h), record: null } })
+}
+
+function escapeRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+function byPathScore(a, b) {
+  return b.score - a.score || a.path.length - b.path.length || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+}
+
+// The listed files under a typed path (`~/Pro`, `/home/u/Projects/oma/SP`),
+// ignoring case, best FileRanker usage score first, then the shorter path.
+// Rows come grouped by folder, so each folder is tested once and only the
+// folders the typed text runs into test their file names.
+function pathHits(rows, query, s, limit, FileRanker) {
+  var q = String(query || "").trim()
+  var typed = q.charAt(0) === "~" ? s.home + q.slice(1) : q
+  var under = new RegExp("^" + escapeRegExp(typed), "i")
+  var lowerTyped = typed.toLowerCase()
+  var best = []
+  var hits = 0
+  var dir = null
+  var state = 0
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r]
+    if (row.dir !== dir) {
+      dir = row.dir
+      var folder = dir === "/" ? "/" : dir + "/"
+      state = under.test(folder) ? 1 : (lowerTyped.indexOf(folder.toLowerCase()) === 0 ? 0 : -1)
+    }
+    if (state < 0 || (state === 0 && !under.test(row.path))) continue
+    hits++
+    var hit = { path: row.path, name: row.name, dir: row.dir, band: 6, score: FileRanker.score(row, s) }
+    if (best.length === limit && byPathScore(hit, best[limit - 1]) >= 0) continue
+    best.push(hit)
+    best.sort(byPathScore)
+    if (best.length > limit) best.pop()
+  }
+  return { hits: hits, rows: best }
+}
+
 function rootSections(candidates, query, ctx, deps) {
   var q = String(query || "").trim()
   var filtered = ctx.filter && ctx.filter !== "all"
@@ -300,7 +381,11 @@ function rootSections(candidates, query, ctx, deps) {
     var results = deps.Ranker.rank(searchable, q, opts)
     var sections = []
     if (ctx.calculation && !filtered) sections.push({ id: "calculator", title: "Calculator", rows: [{ candidate: calculatorCandidate(ctx.calculation), record: null }] })
+    var kind = fileQuery(q, ctx, candidates)
+    var files = kind ? fileRows(ctx.fileHits || [], kind) : []
+    if (kind === "path" && files.length) return [{ id: "files", title: "Files", rows: files }]
     if (results.length > 0) sections.push({ id: "results", title: "Results", rows: results })
+    if (files.length) sections.push({ id: "files", title: "Files", rows: files })
     if (!filtered) sections.push({ id: "fallback-commands", title: "Use “" + q + "” with…", rows: fallbackRows(q) })
     return sections
   }
@@ -505,6 +590,10 @@ if (typeof module !== "undefined") {
     historySections: historySections,
     decorate: decorate,
     rootSections: rootSections,
+    ROOT_FILES_LIMIT: ROOT_FILES_LIMIT,
+    fileQuery: fileQuery,
+    fileCandidate: fileCandidate,
+    pathHits: pathHits,
     submenuSections: submenuSections,
     actionsFor: actionsFor,
     reorderFavorites: reorderFavorites,

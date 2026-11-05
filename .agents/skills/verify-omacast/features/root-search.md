@@ -11,6 +11,7 @@ Typing in the launcher at root ranks applications, every Omarchy menu action and
 - `search-fallback` shows Search Google and Search DuckDuckGo with the query.
 - `search-history` brings back recent queries with ↑ on an empty root.
 - `search-filter` narrows root to Applications or Commands with the Ctrl+P dropdown.
+- `search-files` adds a Files section after Results for file names of 3 or more characters, and the Files section alone for a `~/` or `/` path; `file-search.md` (`files-root`) drives it.
 
 ## How to get to it (user POV)
 

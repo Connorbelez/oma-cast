@@ -269,15 +269,29 @@ Item {
       hits: result.hits,
       count: fileLister.rows.length,
       ms: ms,
-      rows: result.rows.map(function(r) {
-        return { id: "file:" + r.path, path: r.path, title: r.name, subtitle: FileIndex.displayPath(r.dir, backend.paths.home), band: r.band, score: r.score }
-      })
+      rows: result.rows.map(backend.fileHit)
     }
+  }
+
+  function fileHit(r) {
+    return { id: "file:" + r.path, path: r.path, title: r.name, subtitle: FileIndex.displayPath(r.dir, backend.paths.home), band: r.band, score: r.score }
+  }
+
+  // Ranked in the same JS task as the reply that carries the flea hits, so
+  // the launcher's serial guard covers the Files section too.
+  function rootFileHits(query, ctx) {
+    var kind = RootSearch.fileQuery(query, ctx, backend.candidates)
+    if (kind === "name") return backend.searchFiles(query, RootSearch.ROOT_FILES_LIMIT).rows
+    if (kind !== "path") return []
+    var t0 = Date.now()
+    var result = RootSearch.pathHits(fileLister.rows, query, backend.fileSignals(), RootSearch.ROOT_FILES_LIMIT, FileRanker)
+    backend.log("info", "", "files: matched " + result.hits + " paths of " + fileLister.rows.length + " in " + (Date.now() - t0) + " ms")
+    return result.rows.map(backend.fileHit)
   }
 
   function fileSections(query) {
     var rows = backend.searchFiles(query, backend.fileRowsLimit).rows.map(function(r) {
-      return { candidate: { id: r.id, type: "file", kind: "file", title: r.title, subtitle: r.subtitle, glyph: "\uf15b", rootSearch: { when: "always" } } }
+      return { candidate: RootSearch.fileCandidate(r) }
     })
     if (!rows.length) return []
     return [{ id: query.trim() ? "files" : "recent-files", title: query.trim() ? "Files" : "Recent & frequent files", rows: rows }]
@@ -604,6 +618,7 @@ Item {
         else {
           ctx.filter = String(data && data.filter || "all")
           if (query.trim() && ctx.filter === "all") ctx.calculation = backend.calculate(query)
+          ctx.fileHits = backend.rootFileHits(query, ctx)
           sections = RootSearch.rootSections(backend.candidates, query, ctx, backend.deps)
         }
         return sections.map(function(s) {
@@ -614,7 +629,9 @@ Item {
         var rowId = String(data && data.id || "")
         if (rowId === RootSearch.CALCULATOR_ID) return RootSearch.actionsFor({ kind: "calculator" })
         if (rowId.indexOf("calculator-history:") === 0) return RootSearch.actionsFor({ kind: "calculator-history" })
-        if (rowId.indexOf("file:") === 0) return fileActions.list
+        // Quick Look needs the files view's pane, and a trashed row stays on
+        // the root until the next keystroke, so the root offers neither.
+        if (rowId.indexOf("file:") === 0) return data.view === "files" ? fileActions.list : fileActions.list.filter(function(a) { return a.id !== "quick-look" && a.id !== "trash" })
         var candidate = backend.decorated(rowId)
         if (!candidate) {
           var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === data.id })[0]
