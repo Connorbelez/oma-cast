@@ -90,7 +90,8 @@ const SHAPES = [
   ["the root Files section is ranked inside rootSearch.search, so the reply that carries the flea hits carries it", BE, "      search: function(data) {",
     [/ctx\.fileHits = backend\.rootFileHits\(query, ctx\)\s*\n\s*sections = RootSearch\.rootSections\(/]],
   ["rootFileHits ranks synchronously and takes no callback", BE, "  function rootFileHits(",
-    [/^  function rootFileHits\(query, ctx\) \{/, /return backend\.searchFiles\(/, /RootSearch\.pathHits\(/]],
+    [/^  function rootFileHits\(query, ctx\) \{/, /return backend\.searchFiles\(/, /RootSearch\.pathHits\(/,
+      /^  function rootFileHits\(query, ctx\) \{(?:(?!Qt\.callLater|\bProcess\b|function\s*\()[\s\S])*?\n  \}/]],
   ["the helper answers one line at a time, in order", RS, "pub(crate) fn run(",
     [/read_until\(b'\\n'/, /response\(&line, &mut catalog\)/, /writer\.flush\(\)\?/]],
 ]
