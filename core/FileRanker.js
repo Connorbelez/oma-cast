@@ -400,6 +400,6 @@ function recent(rows, s, limit) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    band: band, signals: signals, usage: usage, prepare: prepare, rank: rank
+    band: band, signals: signals, usage: usage, score: score, prepare: prepare, rank: rank
   }
 }

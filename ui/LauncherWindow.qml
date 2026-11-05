@@ -375,7 +375,7 @@ PanelWindow {
 
   function actionsForSelected() {
     if (window.searchPending || !window.selectedRow) return []
-    var r = window.backend.callSync("rootSearch.getActions", { id: window.selectedRow.itemId })
+    var r = window.backend.callSync("rootSearch.getActions", { id: window.selectedRow.itemId, view: window.view.kind })
     return r.ok ? r.data : []
   }
 
