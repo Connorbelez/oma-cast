@@ -575,7 +575,7 @@ Grammar: `{keyword opt="v" opt2='v' | modifier | modifier}`. Quotes accepted: `"
 | Directory frecency | `zoxide query --list --score` | Seeds folder scores. No user text in argv. |
 | Active project | a git repo root whose `.git/logs/HEAD` changed in the last 14 days | Projects become folder nodes with their own weight (+2 [I]). |
 | Last changed | the file's mtime | A recency signal with a 30-day half-life [I], not the final tiebreak. |
-| Opened in Neovim | `~/.local/state/nvim/shada/main.shada` file marks and jump list | msgpack, read by a small parser [I]. The dev machine's file is 267 bytes, so the signal is unproven and lands last. |
+| Opened in Neovim (P7-6, dropped 2026-11-05: the dev machine's file stayed at 267 bytes) | `~/.local/state/nvim/shada/main.shada` file marks and jump list | msgpack, read by a small parser [I]. The dev machine's file is 267 bytes, so the signal is unproven and lands last. |
 
 Not used: access times (useless under `relatime`), the GTK recent-files list (absent on Omarchy), inotify open events (flooded by git, rg and the listing itself) and fanotify (needs root).
 

@@ -116,7 +116,7 @@ Renamed **raylinux → oma-launcher → oma-cast** on 2026-10-19, then **oma-cas
 
 **Phase 1 (Quickshell build): done**, with the gaps listed below. **Phase 0: done.** Omarchy 4.0.0.alpha, Quickshell 0.3.2, Hyprland 0.56.2.
 
-**Phase 7 (file search): partly built, not merged.** P7-1 (the file list, large untouched subtrees, the toast), P7-2 (the Search Files view and `core/FileRanker.js`), P7-3 (the preview pane, Quick Look, Show in Folder, Open With…, Copy Path and Move to Trash), P7-4 (the Files section in root search) and P7-5 (content results in Search Files when few names match, with the Names / Contents dropdown on Ctrl+P) are built on the stacked PRs 3 to 7 and not yet merged; P7-6 (the Neovim signal) is planned. Decisions in SPEC.md §8.6, the stacked-PR plan in `docs/phase7-file-search-plan.md`, measurements and scripts in `docs/phase7-prototypes/`.
+**Phase 7 (file search): partly built, not merged.** P7-1 (the file list, large untouched subtrees, the toast), P7-2 (the Search Files view and `core/FileRanker.js`), P7-3 (the preview pane, Quick Look, Show in Folder, Open With…, Copy Path and Move to Trash), P7-4 (the Files section in root search) and P7-5 (content results in Search Files when few names match, with the Names / Contents dropdown on Ctrl+P) are built on the stacked PRs 3 to 7 and not yet merged; P7-6 (the Neovim signal) was dropped on 2026-11-05 because the shada file on the dev machine has stayed at 267 bytes since 2026-10-18. Decisions in SPEC.md §8.6, the stacked-PR plan in `docs/phase7-file-search-plan.md`, measurements and scripts in `docs/phase7-prototypes/`.
 
 Works:
 - **Root search** ported from ref 02 §4.2–4.6 (`core/Ranker.js`, `core/Frecency.js`, golden tests). Sections (`core/RootSearch.js`):

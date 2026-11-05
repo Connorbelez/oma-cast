@@ -26,7 +26,7 @@ The program runs `skills/p3-mode/playbooks/autopilot-stack.md`. Owners stop at m
   - [ ] P7-3 after P7-2.
   - [ ] P7-4 after P7-2. P7-4 and P7-3 are independent of each other.
   - [ ] P7-5 after P7-3.
-  - [ ] P7-6 after P7-2. It is last in priority and may be dropped if `main.shada` stays empty on the dev machine.
+  - [x] P7-6 after P7-2. It is last in priority and may be dropped if `main.shada` stays empty on the dev machine. Dropped on 2026-11-05: the file is 267 bytes and unchanged since 2026-10-18, so there is no signal to read or to verify against.
 - [ ] Hold the file boundaries. P7-1 touches only `core/FileIndex.js`, `services/FileLister.qml`, `Backend.qml`, `bin/omacast`, `tests/file-index.test.js`, `tests/privacy.test.js` and `SPEC.md`. P7-2 touches only `core/FileRanker.js`, `services/UsageSignals.qml`, `core/RootSearch.js`, `ui/LauncherWindow.qml`, `Backend.qml`, `tests/file-ranker.test.js` and `tests/fixtures/`. P7-3 touches only `ui/FilePreview.qml`, `ui/LauncherWindow.qml`, `services/FileActions.qml`, `Backend.qml` and `tests/file-actions.test.js`. P7-4 touches only `core/RootSearch.js`, `Backend.qml`, `ui/LauncherWindow.qml`, `tests/rootsearch.test.js` and `tests/formal/`. P7-5 touches only `services/ContentSearch.qml`, `core/FileRanker.js`, `ui/LauncherWindow.qml`, `Backend.qml`, `tests/content-search.test.js`, `tests/privacy.test.js` and `tests/formal/`. P7-6 touches only `core/Shada.js`, `services/UsageSignals.qml` and `tests/shada.test.js`.
 - [ ] Hold the review gate. P7-1, P7-2, P7-3, P7-4 and P7-5 change an interaction. They wait for the operator's review in chat with screenshots and a video before merge.
 
@@ -327,6 +327,8 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] The root appends it to the base-branch stack and the operator lands it bottom-up.
 
 ## Read Neovim's file marks as a usage signal (P7-6)
+**Dropped on 2026-11-05.** `~/.local/state/nvim/shada/main.shada` has stayed at 267 bytes since 2026-10-18, which the Spawn owners graph named as the condition for dropping this PR. The section stays as the plan for a machine where the file holds marks.
+
 **Depends on.** P7-2.
 
 **Files.**
@@ -384,7 +386,7 @@ The prototypes ran on 2026-11-04 on the dev machine from the scratch directory a
 - Warm and content-cold search timing. Settled. 24 to 25 ms warm, 148 to 156 ms with file pages evicted, bound by the walk and the file opens, not by matching. `content.sh`, `evict.py`.
 - Matcher in Qt's JS engine. Settled. A character loop costs 45 to 52 ms per keystroke over 14,949 names, a per-name `RegExp` 1 to 4 ms. `v4.qml`, `v4re.qml`.
 - Disk-cold listing. Settled as a floor, without root. The listed tree copied into a btrfs image, mounted through udisks and evicted between rounds, lists in 36 to 74 ms cold (median 45, 1,142 reads) and the full home in 632 to 738 ms cold (12,407 reads), five rounds each, bound by 39 to 52 µs per read through the loop device. The fragmented real home needs more reads, so P7-1 records the first listing after a reboot. `cold-loop.sh`, with `cold.sh` for an operator with root.
-- Neovim shada signal. Unproven. The dev machine's file is 267 bytes. P7-6 is last and may be dropped.
+- Neovim shada signal. Unproven, and P7-6 dropped on 2026-11-05: the dev machine's file is still 267 bytes, unchanged since 2026-10-18.
 
 ## Appendix B. Alternatives rejected
 - A persistent index (Raycast's design). The listing without vendor trees takes 11 to 13 ms warm and the content search 24 to 25 ms, so an index saves nothing a user can feel and adds a cache file, an inotify watcher and a staleness bug class. It returns only on the measured triggers in `SPEC.md §8.6`.
@@ -403,7 +405,7 @@ The prototypes ran on 2026-11-04 on the dev machine from the scratch directory a
 - The 20,000-entry helper catalog. P7-2 does not use the helper for files, so the file list has no cap but the keystroke budget. P7-2's perf block watches the `files: ranked` time and the owner files the helper catalog as a follow-up if the list passes 50,000.
 - `rg --json` output size. A query with thousands of matches produces many megabytes before the 300 ms kill. P7-5. `--max-count 1` per file and the kill timer bound it, and lane 7 checks the forced `copyright` case.
 - Move to Trash on btrfs subvolumes and other mounts. P7-3. The owner tests a file on a second mount if one exists, otherwise records the gap.
-- The shada signal may stay empty on the dev machine. P7-6. The owner writes the fixture with `nvim --headless` and the PR may be dropped.
+- The shada signal may stay empty on the dev machine. P7-6. It did, and the PR was dropped on 2026-11-05.
 - `p3-models.md` is absent. All PRs. The root runs `setup-p3` before spawning.
 - The fork is not synced with Graphite, so `gt submit` refuses it. All PRs. The owner opens the PR with `gh` on the `gt` branch per the PR mechanics until the operator syncs the fork, and the stack shape is unchanged either way.
 - The formal model drifts. P7-4 and P7-5 add messages to `SearchOrdering.tla`. `check.sh` exits 3 on an unsynced anchor and the owner re-syncs before claiming a pass.
