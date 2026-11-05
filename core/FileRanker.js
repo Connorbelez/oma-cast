@@ -448,7 +448,6 @@ function contentMatches(output) {
   return out
 }
 
-// The items whose path is a file in rows, in their order.
 function listed(items, rows) {
   var byPath = joinedNames(rows).byPath
   return items.filter(function(m) { return byPath[m.path] !== undefined })
