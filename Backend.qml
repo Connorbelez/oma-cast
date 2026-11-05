@@ -275,9 +275,11 @@ Item {
   }
 
   // The path is the file's own, never the typed query, and starts with "/",
-  // so xdg-open cannot read it as a flag.
+  // so xdg-open cannot read it as a flag. Only a listed file opens, so an IPC
+  // caller cannot open or record a private path the list leaves out.
   function openFile(value) {
     var path = backend.checkFilePath(value)
+    if (!fileLister.rows.some(function(r) { return r.path === path })) throw new Error("not in the file list")
     backend.recordVisit(path, "")
     Util.execArgv(["uwsm-app", "--", "xdg-open", path])
     return { close: true, hud: path.slice(path.lastIndexOf("/") + 1) }
