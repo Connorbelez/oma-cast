@@ -45,6 +45,12 @@ test("the Contents dropdown forces content rows from three characters on", () =>
   assert.equal(FileRanker.revealContent("fre", named("fresh.md", 5), false), false)
 })
 
+test("a space in the query reveals contents however many names hold it", () => {
+  const notes = named("my notes.md", 6)
+  assert.deepEqual([FileRanker.nameHits(notes, "my notes"), FileRanker.revealContent("my notes", notes, false)], [6, true])
+  assert.deepEqual([FileRanker.nameHits(notes, "notes"), FileRanker.revealContent("notes", notes, false)], [6, false])
+})
+
 test("the reveal rule counts names only when the length, the dropdown and the space leave it open", () => {
   assert.deepEqual([["fr", false], ["zoxide q", false], ["copyright", true]].map(([q, forced]) => FileRanker.revealContent(q, null, forced)), [false, true, true])
   assert.throws(() => FileRanker.revealContent("frec", null, false), TypeError)
@@ -83,6 +89,11 @@ test("a matching line longer than 200 characters is cut after 200, and a match i
   assert.equal(w.text, "import \"core/Frecency.js\" as Frecency")
   const [x] = FileRanker.contentMatches(match(HOME + "/c.txt", "a".repeat(30) + "Frecency", 1, "Frec"))
   assert.equal(x.text, "…Frecency")
+})
+
+test("control characters inside the matching line become one space each run", () => {
+  const [m] = FileRanker.contentMatches(match(HOME + "/d.log", "a\u0000\u0000b\u001b[31mfrec\u007fend\n", 1, "frec"))
+  assert.equal(m.text, "a b [31mfrec end")
 })
 
 test("content rows keep listed files only, best folder prior first, then the shorter path, at most 20", () => {
