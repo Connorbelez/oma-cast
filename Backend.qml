@@ -239,10 +239,17 @@ Item {
     return signals
   }
 
+  // Bumped once a new list or new signals are warmed, so an open Search Files
+  // view shows them without a keystroke.
+  property int filesRevision: 0
+
   Timer {
     id: fileWarmTimer
     interval: 50
-    onTriggered: FileRanker.prepare(fileLister.rows, backend.fileSignals(), backend.fileRowsLimit)
+    onTriggered: {
+      FileRanker.prepare(fileLister.rows, backend.fileSignals(), backend.fileRowsLimit)
+      backend.filesRevision++
+    }
   }
 
   Connections {

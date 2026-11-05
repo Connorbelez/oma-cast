@@ -662,6 +662,7 @@ PanelWindow {
     // Not under an alert: onCandidatesRevisionChanged skips that rebuild, so a
     // search started here could be cancelled with nothing left to settle it.
     function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert && window.query) window.rebuild(false) }
+    function onFilesRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert && window.view.kind === "files") window.rebuild(false) }
   }
 
 
