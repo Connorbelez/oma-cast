@@ -63,6 +63,7 @@ function nameBand(m, name) {
 }
 
 function relativeDir(dir, home) {
+  if (dir === home) return ""
   return dir.indexOf(home + "/") === 0 ? dir.slice(home.length + 1) : dir
 }
 

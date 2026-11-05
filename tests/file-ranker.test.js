@@ -100,6 +100,13 @@ test("band names each kind of match", () => {
   assert.deepEqual(cases.map(([q, p]) => FileRanker.band(q, row(p), HOME)), cases.map((c) => c[2]))
 })
 
+test("a file in the home dir matches no path segment of the home path itself", () => {
+  const inHome = { path: HOME + "/notes.txt", name: "notes.txt", dir: HOME }
+  const inU = { path: HOME + "/u/notes.txt", name: "notes.txt", dir: HOME + "/u" }
+  assert.deepEqual(["home notes", "u notes"].map((q) => [FileRanker.band(q, inHome, HOME), FileRanker.band(q, inU, HOME)]), [[-1, -1], [-1, 6]])
+  assert.deepEqual(FileRanker.rank([inHome, inU], "u notes", FileRanker.signals("", {}, HOME, fixture.nowMs)).rows.map((r) => r.path), [HOME + "/u/notes.txt"])
+})
+
 test("the empty query lists files by usage alone", () => {
   const recent = FileRanker.rank(rows, "  ", signals(), 4)
   assert.deepEqual(recent.rows.map(short), [
