@@ -53,13 +53,18 @@ Rectangle {
     anchors.bottom: divider.top
     anchors.margins: pane.px(12)
 
+    // Under PreserveAspectFit, Qt decodes the image at sourceSize even when
+    // that scales it up. Under the default Stretch, sourceSize only scales
+    // down and keeps the aspect, so the Image sizes itself to fit.
     Image {
       id: image
-      anchors.fill: parent
+      readonly property real fit: implicitWidth > 0 && implicitHeight > 0 ? Math.min(content.width / implicitWidth, content.height / implicitHeight) : 0
+      anchors.centerIn: parent
+      width: implicitWidth * fit
+      height: implicitHeight * fit
       visible: pane.kind === "image"
       asynchronous: true
       cache: false
-      fillMode: Image.PreserveAspectFit
       sourceSize.width: 1600
       sourceSize.height: 1600
       source: pane.kind === "image" ? pane.preview.imageSource : ""
