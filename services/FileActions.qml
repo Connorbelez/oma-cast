@@ -7,6 +7,7 @@ Item {
   id: actions
 
   signal trashed(string path, bool ok)
+  signal message(string level, string text, var metadata)
 
   readonly property int textLimit: 1048576
   readonly property int imageLimit: 20971520
@@ -117,7 +118,7 @@ Item {
     if (previewRun.running) {
       actions.queued = request
       previewRun.done = null
-      previewRun.running = false
+      previewRun.signal(15)
       return
     }
     actions.startPreview(request)
@@ -126,7 +127,7 @@ Item {
   function cancelPreview() {
     actions.queued = null
     previewRun.done = null
-    if (previewRun.running) previewRun.running = false
+    if (previewRun.running) previewRun.signal(15)
   }
 
   function startPreview(request) {
@@ -145,10 +146,13 @@ Item {
     previewRun.done = null
     var next = actions.queued
     actions.queued = null
+    if (previewRun.code === 124) actions.message("warning", "files: preview timed out", null)
     if (done) done(actions.parsePreview(previewRun.path, previewRun.mode, previewOut.text, Number(previewRun.limit), previewRun.code))
     if (next) actions.startPreview(next)
   }
 
+  // timeout puts the script in its own process group, and SIGTERM to it
+  // ends the group, so a cancel leaves no pdftotext or head behind.
   Process {
     id: previewRun
     property string path: ""
@@ -158,13 +162,13 @@ Item {
     property bool exited: false
     property bool streamed: false
     property int code: -1
-    command: ["bash", "-c", actions.previewScript, "omacast-preview", previewRun.path, previewRun.mode, previewRun.limit]
+    command: ["timeout", "-k", "2", "10", "bash", "-c", actions.previewScript, "omacast-preview", previewRun.path, previewRun.mode, previewRun.limit]
     stdout: StdioCollector {
       id: previewOut
       onStreamFinished: { previewRun.streamed = true; actions.previewDone() }
     }
-    onExited: function(exitCode) {
-      previewRun.code = exitCode
+    onExited: function(exitCode, exitStatus) {
+      previewRun.code = exitStatus === 0 ? exitCode : -1
       previewRun.exited = true
       actions.previewDone()
     }

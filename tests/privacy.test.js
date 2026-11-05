@@ -325,4 +325,5 @@ test("every process FileActions starts has fixed argv", () => {
     for (const arg of argv) assert.ok(/^"[^"$`\\]*"$/.test(arg) || arg in FILE_ACTION_ARGS, `${arg} in [${argv}]`)
   }
   assert.doesNotMatch(source, /execDetached|command:(?!\s*\[)|\.command\s*=/)
+  assert.match(source, /\n    command: \["timeout", "-k", "2", "10", "bash", "-c", actions\.previewScript, /)
 })

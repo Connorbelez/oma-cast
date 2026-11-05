@@ -348,6 +348,7 @@ Item {
 
   FileActions {
     id: fileActions
+    onMessage: function(level, text, metadata) { backend.log(level, "", text, metadata) }
     onTrashed: function(path, ok) {
       if (ok) {
         fileLister.rows = fileLister.rows.filter(function(r) { return r.path !== path })
