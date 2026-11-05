@@ -44,7 +44,7 @@ Read every result with the p3-stack `/statechart` skill, pointing it at `tests/f
 
 ### Coverage record
 
-Last confirmed against the code at commit **`a30199d`** (sync commit).
+Last confirmed against the code at commit **`d800d89`** (sync commit).
 
 | Code | Model | Anchor |
 |---|---|---|
@@ -54,7 +54,7 @@ Last confirmed against the code at commit **`a30199d`** (sync commit).
 | `ui/LauncherWindow.qml` `confirmAlert()` and `pick()` (each replays the payload its alert or picker opened with), alert, picker and panel Esc | `CloseOverlay` | none (no guard) |
 | `ui/LauncherWindow.qml` `onShownChanged`, `prepare()`, `popToRoot()` | `Hide`, `Show`, `PopToRoot` | `CancelOnHide` |
 | `ui/LauncherWindow.qml` `setQuery`, `push`, `pop`, `setFilter` (the root filter and the Names / Contents dropdown), `recallHistory` | `Edit` | shape "every query write is followed by rebuild()" |
-| `ui/LauncherWindow.qml` `onCandidatesRevisionChanged`, `onCalculatorRevisionChanged` | `Reindex` (last step), `CalcRevision` | `CalcSkipsAlert`, shapes for both conditions |
+| `ui/LauncherWindow.qml` `onCandidatesRevisionChanged`, `onCalculatorRevisionChanged`, `onFilesRevisionChanged` | `Reindex` (last step), `CalcRevision` (the files handler has the same conditions) | `CalcSkipsAlert`, shapes for the first two conditions |
 | `Backend.qml` `searchAsync()` | `UiRebuild` (sync and async members) | shape "Backend.searchAsync answers empty queries…" |
 | `Backend.qml` `rootSearch.search` and `rootFileHits()` (the root Files section) | the reply's `rows` in `UiCallback`: ranked in the same task, so no slot of its own | shapes "the root Files section is ranked inside rootSearch.search…" and "rootFileHits ranks synchronously…" |
 | `Backend.qml` `rebuildCandidates()` | `Reindex` | `CancelOnReindex`, shape "Backend swaps ids and entries…" |
@@ -63,13 +63,15 @@ Last confirmed against the code at commit **`a30199d`** (sync commit).
 | `services/NativeSearch.qml` `receive()` | `NsReceive`, `Receive` | `ReplyIdCheck`, shape "receive() marks the load done…" |
 | `services/NativeSearch.qml` `fail()`, timeout `Timer`, helper `onStarted`/`onExited` | `NsFail`, `Timeout`, `HelperStart`, `HelperExit` | shapes for each |
 | `search/src/protocol.rs` `run()` | `HelperStep` | shape "the helper answers one line at a time, in order" |
-| `ui/LauncherWindow.qml` `rebuild()` and `onShownChanged` calling `cancelContents()`, and `cancelContents()` itself | `UiCancelContents` inside `UiRebuild` and `Hide` | `CancelContentOnRebuild`, `CancelContentOnHide`, shape "cancelContents stops the stillness timer, then cancels ContentSearch" |
-| `ui/LauncherWindow.qml` `rebuild()` restarting `contentDelay` in the files view; `popToRoot()` | the third `UiRebuild` member (synchronous, shown only) | shapes "rebuild restarts the stillness timer only in the files view…", "popToRoot leaves the files view before its rebuild…", "the files view answers synchronously…" |
-| `ui/LauncherWindow.qml` `contentDelay`, `searchContents()` and its callback, `applyContents()` | `ContentFire`, `UiContents`; `UiCallback` clears the section | `ContentSerialCheck`, shapes "contentDelay is the only caller of searchContents()", "applySearch replaces every row…" |
+| `ui/LauncherWindow.qml` `rebuild()` and `onShownChanged` calling `cancelContents()`, and `cancelContents()` itself | `UiCancelContents` inside `UiRebuild` and `Hide` (it also clears `ui.cfor` and `ui.held`) | `CancelContentOnRebuild`, `CancelContentOnHide`, shape "cancelContents stops the stillness timer, clears the Contents record, then cancels ContentSearch…" (the call must be its own statement) |
+| `ui/LauncherWindow.qml` `rebuild()` for the Contents record's own view and query (`kept`), which bumps no serial, cancels nothing, restarts no timer and puts the section back with `withContents()` | `KeepRebuild`, chosen when `ui.cfor = ui.input` | `GuardSerial` (the bump is `kept ? … : ++…`), shapes "a rebuild for the Contents record's own view and query keeps…", "withContents shows the section only for the view and query…" |
+| `ui/LauncherWindow.qml` `rebuild()` claiming a new record and restarting `contentDelay` in the files view; `popToRoot()` | the third `UiRebuild` member (synchronous, shown only), which sets `ui.cfor` | shapes "rebuild restarts the stillness timer only in the files view for a new record…", "popToRoot leaves the files view before its rebuild…", "the files view answers synchronously…" |
+| `ui/LauncherWindow.qml` `contentDelay`, `searchContents()` and its callback, `applyContents()` | `ContentFire`, `UiContents` (holds the reply when an overlay is open); `UiCallback` clears the section on a new input | `ContentSerialCheck` (`searchContents()` sends the serial and `applyContents()` checks it, the second layer behind `ContentPendingCheck`), shapes "contentDelay is the only caller of searchContents()", "applySearch replaces every row and puts back only…", "a content reply that lands while a layer is open is held…" |
+| `ui/LauncherWindow.qml` `onLayerOpenChanged` → `Qt.callLater(applyHeld)`, `applyHeld()` | `ApplyHeld` (enabled when no overlay is open) | shape "applyHeld waits for every layer to close…" |
 | `Backend.qml` `searchContents()`, `cancelContents()` | inside `ContentFire` (the reveal rule is the first member) and `UiCancelContents` | shapes "Backend.searchContents hands the request's serial back…", "Backend.cancelContents is ContentSearch.cancel" |
 | `services/ContentSearch.qml` `search()`, `start()`, `cancel()` | `CsSearch`, `CsStart`, `CsCancel` | shapes for each |
 | `services/ContentSearch.qml` `kill()` and the 300 ms `killTimer` | `ContentKill` | shapes "kill() signals the pending request's run and keeps the request pending", "the kill timer calls kill()" |
-| `services/ContentSearch.qml` `finished()`, the run's `onExited` and output, the watchdog | `ContentExit` | `ContentPendingCheck`, shapes "finished() waits for exit and output…", "the run's exit reaches finished()" |
+| `services/ContentSearch.qml` `finished()`, the run's `onExited` and output, the watchdog's `giveUp()` | `ContentExit` | `ContentPendingCheck`, shapes "finished() waits for exit and output…", "the run's exit reaches finished()" |
 
 ## Fixed finding: a dead launcher after an alert
 
@@ -96,23 +98,25 @@ After any change to the model or anchors, run `tests/formal/check.sh --mutants`.
 Several lines protect against the same thing. TLC shows that removing any one of these alone breaks no safety property: `GuardSerial`, `GuardRevision`, `CancelOnRebuild`, `CancelOnHide`, `CancelOnReindex`, `InvalidateCancels`, `ContentSerialCheck` and `ContentPendingCheck`.
 - Stale replies are stopped by `NativeSearch` itself: it has a single pending slot, and `receive()` checks the id.
 - A reply computed on the old catalog gets through only when `CancelOnReindex`, `InvalidateCancels` and `GuardRevision` are all gone. That's the `reindex-unguarded` mutant.
-- A stale content reply is stopped by the view's serial check and by `ContentSearch.finished()`, which delivers only the pending request's run (a rebuild cancels the old one). It gets through only when the serial check goes with one of the other two, which the `content-unguarded` and `content-no-cancel` mutants show.
+- A stale content reply is stopped by `ContentSearch.finished()`, which delivers only the pending request's run (a new input cancels the old one), and by the view's serial check in `applyContents()`, the second layer, which nothing in the code reaches today. It gets through only when the serial check goes with one of the other two, which the `content-unguarded` and `content-no-cancel` mutants show.
 
 Don't delete these layers because the model says they're redundant: the model only covers what's listed here.
 
 ## Bounds and assumptions
 
 - **Event budget.** `MaxEvents = 6` user and environment events per behaviour (show, hide, edit, activate, panel, overlay close, calculator update, pop-to-root), plus `MaxReindex = 2` candidate reloads. Helper, timer and rg steps are unbounded.
-  - Safety explores about 15.3 M distinct states with these bounds, in about 52 s on 24 cores. It was 1.9 M before the content source.
+  - Safety explores about 14.6 M distinct states with these bounds, in about 48 s on 24 cores. It was 1.9 M before the content source and 15.3 M before the kept rebuild, which no longer bumps the serial.
   - Each property's shortest counterexample needs at most 4 events.
 - **Input.** Typed text, the pushed view and the root filter are one version counter. The model checks that rows belong to the current input, not what is ranked inside them.
 - **Empty queries.** Whether a query is empty (the synchronous path) is chosen freely at each rebuild. This covers more behaviours than the code has, never fewer.
 - **Writes before start.** Writes to the helper before it starts are buffered in order. If Quickshell dropped them instead, nothing would change: the `onStarted` load supersedes the only early write.
 - **Helper failures.** A malformed or error reply can arrive at any time, and so can a helper exit. Either one is followed by `fail()`.
 - **Fairness.** The helper, the receive path and the 1 s timeout are weakly fair. The user may stop at any time. The content steps carry no fairness: `SearchSettles` is about `searchPending`, which the content source never sets.
-- **Content requests.** A content request is named by its serial. The stillness timer starts at most one request per rebuild, and every rebuild bumps the serial, so this matches `ContentSearch`'s identity check on the request object. Whether the reveal rule says yes is chosen freely at each firing.
-- **The rg run.** Its output and its exit are one step, `ContentExit`, because `finished()` waits for both. A run signalled by `cancel()` or `kill()` may still exit at any later time, and the watchdog's forced finish is the same step.
-- **Combined anchors.** `CancelOnHide` and `ContentSerialCheck` stand for three lines each and `InvalidateCancels` for two. Deleting only one of a group sets the whole constant `FALSE`, which is a slightly coarser model than the edit.
+- **Content requests.** A content request is named by its serial. The stillness timer starts at most one request per rebuild that claims a new Contents record, and every such rebuild bumps the serial, so this matches `ContentSearch`'s identity check on the request object. Whether the reveal rule says yes is chosen freely at each firing.
+- **Kept rebuilds.** A rebuild whose input equals the Contents record's (`ui.cfor`) is `KeepRebuild`. The files view answers synchronously, so its rows land in the same step and no older name reply is in flight for the unchanged serial to guard.
+- **Held replies.** A content reply that passes the serial check while the panel or an alert is open is held in `ui.held`, and `ApplyHeld` puts it through the same check once no overlay is open. The code also holds under the picker, Quick Look and the About panel, which the model folds into "no overlay".
+- **The rg run.** Its output and its exit are one step, `ContentExit`, because `finished()` waits for both. A run signalled by `cancel()` or `kill()` may still exit at any later time. The watchdog finishes only a run whose process never started, which reports nothing, so that finish is the same step.
+- **Combined anchors.** `CancelOnHide` stands for three lines, `ContentSerialCheck` for four across `searchContents()` and `applyContents()`, and `InvalidateCancels` for two. Deleting only one of a group sets the whole constant `FALSE`, which is a slightly coarser model than the edit.
 
 ## Not covered
 
@@ -121,6 +125,7 @@ Don't delete these layers because the model says they're redundant: the model on
 - Toast, About and dropdown popups: they don't gate activation.
 - `omacast run` over IPC, which doesn't use rows, and `files.searchContents` over IPC, which shares `ContentSearch` with the view and can cancel its request.
 - What rg finds, the reveal rule's answer, and the 4,096-character and 300-file bounds in the content script (the privacy and content-search tests cover them).
+- Where the selection goes when a Contents section lands or is kept. The model has no selection, and the live lanes "Contents, refresh" and "Contents, under the panel" in `.agents/skills/verify-omacast/features/file-search.md` cover it.
 - The Omarchy menu source's own async loading.
 - Real-time ordering: the model is untimed, and the 1 s timeout is just a possible event.
 - Anything outside one launcher instance.
@@ -138,7 +143,7 @@ After a covered change:
 To see what changed since the last sync:
 
 ```sh
-git diff a30199d -- ui/LauncherWindow.qml services/NativeSearch.qml services/ContentSearch.qml Backend.qml search/src/protocol.rs
+git diff d800d89 -- ui/LauncherWindow.qml services/NativeSearch.qml services/ContentSearch.qml Backend.qml search/src/protocol.rs
 ```
 
 `/maintain-formal-verification-skill` covers bringing this back in line after changes that skipped the check.

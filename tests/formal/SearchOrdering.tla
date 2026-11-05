@@ -211,10 +211,10 @@ UiContents(X, r) ==
                       !.gh.staleContent = @ \/ r.input # X.ui.input]
   ELSE X
 
-\* A rebuild for the files view's Contents record's own input (a list
-\* refresh, new signals, a toast): the serial stays, nothing about contents
-\* is cancelled or restarted, and the synchronous answer puts the kept
-\* section back under the new rows.
+\* A rebuild for the input of the files view's Contents record, such as a
+\* list refresh, new signals or a toast. The serial stays, nothing about
+\* contents is cancelled or restarted, and the synchronous answer puts the
+\* kept section back under the new rows.
 KeepRebuild(X) ==
   LET X1 == IF CancelOnRebuild THEN NsCancel(X) ELSE X
   IN [NsCancel(X1) EXCEPT !.ui.rowsInput = X1.ui.input, !.ui.pending = FALSE]
@@ -360,8 +360,8 @@ ContentExit == cs.run.serial # 0 /\ UNCHANGED env /\
       X2 == IF current \/ ~ContentPendingCheck THEN UiContents(X1, r) ELSE X1
   IN Go(CsStart(X2))
 
-\* Qt.callLater(applyHeld) once the panel or alert has closed: the held
-\* reply goes through applyContents(), serial guard first.
+\* Qt.callLater(applyHeld) after the panel or alert closes. The held reply
+\* goes through applyContents(), serial guard first.
 ApplyHeld == ui.held # NoHeld /\ ui.overlay = "none" /\ UNCHANGED env /\
   Go(UiContents([S EXCEPT !.ui.held = NoHeld], ui.held))
 
