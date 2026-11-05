@@ -336,3 +336,98 @@ test("every script FileActions runs is one string literal", () => {
   assert.ok(scripts.length >= 1)
   for (const line of scripts) assert.match(line, /^  readonly property string \w+: '(?:[^'\\]|\\.)*'$/, line.slice(0, 80))
 })
+
+// Content search: rg gets fixed flags, the two roots and omacast's ignore
+// files. The query goes to the script on stdin and reaches rg on stdin.
+const CONTENT_ARGS = {
+  "service.searchScript": "a constant script",
+  "run.homeRoot": "the home root (FileLister.defaultRoots)",
+  "run.configRoot": "~/.config (FileLister.defaultRoots)",
+  "service.ignoreFile": "~/.config/omacast/file-search.ignore",
+  "service.untouchedFile": "the large untouched subtrees, as ignore patterns"
+}
+
+function contentSource() {
+  return fs.readFileSync(path.join(root, "services/ContentSearch.qml"), "utf8")
+}
+
+function contentScript() {
+  const line = contentSource().split("\n").find((l) => l.startsWith("  readonly property string searchScript: '"))
+  return new Function("return " + line.slice(line.indexOf("'")))()
+}
+
+test("ContentSearch starts one fixed argv from the home dir and writes the query to stdin", () => {
+  const source = contentSource()
+  const commands = [...source.matchAll(/command:\s*\[([^\]]*)\]/g)].map((m) => m[1].split(",").map((s) => s.trim()))
+  assert.equal(commands.length, 1)
+  assert.deepEqual(commands[0].slice(0, 8), ['"timeout"', '"-k"', '"2"', '"5"', '"bash"', '"-c"', "service.searchScript", '"omacast-content"'])
+  for (const arg of commands[0]) assert.ok(/^"[^"$`\\]*"$/.test(arg) || arg in CONTENT_ARGS, `${arg} in [${commands[0]}]`)
+  assert.doesNotMatch(source, /execDetached|execArgv|\.command\s*=|command:(?!\s*\[)/)
+  assert.match(source, /\n    workingDirectory: service\.home\n/)
+  assert.match(source, /onStarted: \{\s*run\.write\(run\.request\.query \+ "\\n"\)\s*run\.stdinEnabled = false\s*\}/)
+  const scripts = source.split("\n").filter((line) => /property string \w*[Ss]cript\b/.test(line))
+  assert.deepEqual(scripts.map((line) => /^  readonly property string searchScript: '(?:[^'\\]|\\.)*'$/.test(line)), [true])
+  for (const call of source.match(/service\.message\([^\n]*/g)) assert.doesNotMatch(call, /query/, call)
+})
+
+function fakeContentRg(home, body) {
+  fs.writeFileSync(home + "/rg", [
+    "#!/bin/bash",
+    'tr "\\0" " " </proc/$$/cmdline >>"$LOG"; echo >>"$LOG"',
+    'tr "\\0" " " </proc/$PPID/cmdline >>"$LOG.parents"; echo >>"$LOG.parents"',
+    'cat >>"$LOG.stdin"',
+    body
+  ].join("\n") + "\n", { mode: 0o755 })
+}
+
+function runContentScript(home, input, ignore, untouched) {
+  return spawnSync("bash", ["-c", contentScript(), "omacast-content", "/home/u", "/home/u/.config", ignore, untouched], {
+    input, encoding: "utf8", env: { ...process.env, LOG: home + "/cmdlines", PATH: home + ":" + process.env.PATH }
+  })
+}
+
+test("the content script gives rg the query on stdin only and passes on short match lines", (t) => {
+  const home = tempHome(t)
+  const ignore = home + "/file-search.ignore"
+  const untouched = home + "/file-search-untouched.ignore"
+  fs.writeFileSync(ignore, ".ssh/\n")
+  fs.writeFileSync(untouched, "")
+  const long = JSON.stringify({ type: "match", data: { path: { text: "/home/u/min.js" }, lines: { text: "x".repeat(5000) } } })
+  fakeContentRg(home, [
+    `echo '{"type":"begin","data":{}}'`,
+    `echo '{"type":"match","data":{"path":{"text":"'"\${@: -1}"'/a.md"}}}'`,
+    `echo '${long}'`,
+    `echo '{"data":{},"type":"summary"}'`
+  ].join("\n"))
+  const r = runContentScript(home, "my secret query\n", ignore, untouched)
+  assert.equal(r.status, 0, r.stderr)
+  assert.equal(r.stdout, '{"type":"match","data":{"path":{"text":"/home/u/a.md"}}}\n{"type":"match","data":{"path":{"text":"/home/u/.config/a.md"}}}\n')
+  const log = home + "/cmdlines"
+  assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n").map((l) => l.trim().replace(/^\/bin\/bash \S+\/rg /, "rg ")), [
+    `rg --json -F -i -f - --max-count 1 --max-filesize 1M --ignore-file ${ignore} --ignore-file ${untouched} /home/u`,
+    `rg --json -F -i -f - --max-count 1 --max-filesize 1M --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`
+  ])
+  assert.equal(fs.readFileSync(log + ".stdin", "utf8"), "my secret query\nmy secret query\n")
+  const parents = fs.readFileSync(log + ".parents", "utf8")
+  assert.match(parents, /omacast-content \/home\/u \/home\/u\/\.config/)
+  assert.ok(!parents.includes("secret"), parents)
+})
+
+test("the content script runs no rg without both ignore files or with an empty query, and passes on at most 1,000 files", (t) => {
+  const home = tempHome(t)
+  const ignore = home + "/file-search.ignore"
+  const untouched = home + "/file-search-untouched.ignore"
+  fs.writeFileSync(ignore, ".ssh/\n")
+  fs.writeFileSync(untouched, "")
+  fakeContentRg(home, `for i in $(seq 1500); do echo '{"type":"match","data":{"line_number":'$i'}}'; done`)
+  assert.equal(runContentScript(home, "frec\n", ignore, home + "/missing.ignore").status, 3)
+  fs.mkdirSync(home + "/dir.ignore")
+  assert.equal(runContentScript(home, "frec\n", home + "/dir.ignore", untouched).status, 3)
+  assert.equal(runContentScript(home, "\n", ignore, untouched).status, 2)
+  assert.equal(runContentScript(home, "", ignore, untouched).status, 2)
+  assert.equal(fs.existsSync(home + "/cmdlines"), false)
+  const r = runContentScript(home, "frec\n", ignore, untouched)
+  assert.equal(r.status, 0, r.stderr)
+  const lines = r.stdout.trim().split("\n")
+  assert.deepEqual([lines.length, lines[0], lines[999]], [1000, '{"type":"match","data":{"line_number":1}}', '{"type":"match","data":{"line_number":1000}}'])
+})
