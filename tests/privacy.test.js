@@ -387,22 +387,29 @@ function runContentScript(home, input, ignore, untouched) {
   })
 }
 
-test("the content script gives rg the query on stdin only and passes on short match lines", (t) => {
+test("the content script gives rg the query on stdin only and passes on match lines that fit in one pipe write", (t) => {
   const home = tempHome(t)
   const ignore = home + "/file-search.ignore"
   const untouched = home + "/file-search-untouched.ignore"
   fs.writeFileSync(ignore, ".ssh/\n")
   fs.writeFileSync(untouched, "")
-  const long = JSON.stringify({ type: "match", data: { path: { text: "/home/u/min.js" }, lines: { text: "x".repeat(5000) } } })
+  const sized = (name, fill, bytes) => {
+    const line = JSON.stringify({ type: "match", data: { path: { text: "/home/u/" + name }, lines: { text: "" } } })
+    return line.replace('"text":""', '"text":"' + fill.repeat((bytes - Buffer.byteLength(line)) / Buffer.byteLength(fill)) + '"')
+  }
+  const fits = sized("fits.js", "x", 4095)
+  const long = [sized("over.js", "x", 4096), sized("wide.js", "é", 4097), sized("min.js", "x", 5000)]
+  assert.deepEqual([fits, ...long].map((l) => [Buffer.byteLength(l), l.length]), [[4095, 4095], [4096, 4096], [4097, 2088], [5000, 5000]])
   fakeContentRg(home, [
     `echo '{"type":"begin","data":{}}'`,
     `echo '{"type":"match","data":{"path":{"text":"'"\${@: -1}"'/a.md"}}}'`,
-    `echo '${long}'`,
+    `[[ \${@: -1} == /home/u ]] && echo '${fits}'`,
+    ...long.map((l) => `echo '${l}'`),
     `echo '{"data":{},"type":"summary"}'`
   ].join("\n"))
   const r = runContentScript(home, "my secret query\n", ignore, untouched)
   assert.equal(r.status, 0, r.stderr)
-  assert.deepEqual(r.stdout.split("\n").sort(), ["", '{"type":"match","data":{"path":{"text":"/home/u/.config/a.md"}}}', '{"type":"match","data":{"path":{"text":"/home/u/a.md"}}}'])
+  assert.deepEqual(r.stdout.split("\n").sort(), ["", '{"type":"match","data":{"path":{"text":"/home/u/.config/a.md"}}}', '{"type":"match","data":{"path":{"text":"/home/u/a.md"}}}', fits])
   const log = home + "/cmdlines"
   assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n").map((l) => l.trim().replace(/^\/bin\/bash \S+\/rg /, "rg ")).sort(), [
     `rg --json --line-buffered -F -i -f - --max-count 1 --max-filesize 1M -j 32 --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`,

@@ -124,7 +124,7 @@ Don't delete these layers because the model says they're redundant: the model on
 - `rootSearch.performAction` outcomes beyond "opens an alert, rebuilds, or nothing".
 - Toast, About and dropdown popups: they don't gate activation.
 - `omacast run` over IPC, which doesn't use rows, and `files.searchContents` over IPC, which shares `ContentSearch` with the view and can cancel its request.
-- What rg finds, the reveal rule's answer, and the 4,096-character and 300-file bounds in the content script (the privacy and content-search tests cover them).
+- What rg finds, the reveal rule's answer, and the 4,095-byte line and 300-file bounds in the content script (the privacy and content-search tests cover them).
 - Where the selection goes when a Contents section lands or is kept. The model has no selection, and the live lanes "Contents, refresh" and "Contents, under the panel" in `.agents/skills/verify-omacast/features/file-search.md` cover it.
 - The Omarchy menu source's own async loading.
 - Real-time ordering: the model is untimed, and the 1 s timeout is just a possible event.

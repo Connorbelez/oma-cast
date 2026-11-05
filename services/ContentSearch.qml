@@ -23,13 +23,17 @@ Item {
   // missing, and an empty pattern matches every line, so both exit first.
   // Cold reads bound the run, and rg's default thread count left the home
   // dir at 203 to 219 ms cold against 140 at -j 24 and 111 at -j 48. The
-  // roots write into one pipe at the same time, each line in one write, and
-  // awk flushes every line it passes, so a kill keeps the lines printed
-  // before it. rg ignores --max-columns under --json and one common word
-  // printed 16 MB in 38 ms, so only match lines of at most 4,096 characters
-  // reach the shell, for at most 300 files, because 1,000 such lines held
-  // the GUI thread for up to 138 ms in the parse.
-  readonly property string searchScript: '[[ -f $3 && -r $3 && -f $4 && -r $4 ]] || exit 3; IFS= read -r q && [[ $q ]] || exit 2; { printf "%s\\n" "$q" | rg --json --line-buffered -F -i -f - --max-count 1 --max-filesize 1M -j 32 --ignore-file "$3" --ignore-file "$4" "$1" & printf "%s\\n" "$q" | rg --json --line-buffered -F -i -f - --max-count 1 --max-filesize 1M -j 32 --hidden --ignore-file "$3" --ignore-file "$4" "$2" & wait; } | awk \'length($0) <= 4096 && /^\\{"type":"match"/ { print; fflush(); if (++n == 300) exit }\''
+  // roots write into one pipe at the same time. A pipe write of more than
+  // 4,096 bytes can be split and mixed with the other root's lines, so each
+  // root's own awk passes on only lines of at most 4,095 bytes plus the
+  // newline, one write each. The bound is on rg's JSON line, so match text
+  // of about 3,800 characters is the real limit. Every awk flushes each line
+  // it passes, so a kill keeps the lines printed before it. rg ignores
+  // --max-columns under --json and one common word printed 16 MB in 38 ms,
+  // so only these short lines reach the shell, for at most 300 files,
+  // because 1,000 such lines held the GUI thread for up to 138 ms in the
+  // parse.
+  readonly property string searchScript: '[[ -f $3 && -r $3 && -f $4 && -r $4 ]] || exit 3; IFS= read -r q && [[ $q ]] || exit 2; { printf "%s\\n" "$q" | rg --json --line-buffered -F -i -f - --max-count 1 --max-filesize 1M -j 32 --ignore-file "$3" --ignore-file "$4" "$1" | LC_ALL=C awk \'length <= 4095 { print; fflush() }\' & printf "%s\\n" "$q" | rg --json --line-buffered -F -i -f - --max-count 1 --max-filesize 1M -j 32 --hidden --ignore-file "$3" --ignore-file "$4" "$2" | LC_ALL=C awk \'length <= 4095 { print; fflush() }\' & wait; } | awk \'/^\\{"type":"match"/ { print; fflush(); if (++n == 300) exit }\''
 
   function search(request, callback) {
     service.cancel()
