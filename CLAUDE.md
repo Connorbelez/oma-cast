@@ -121,7 +121,8 @@ Renamed **raylinux → oma-launcher → oma-cast** on 2026-10-19, then **oma-cas
 Works:
 - **Root search** ported from ref 02 §4.2–4.6 (`core/Ranker.js`, `core/Frecency.js`, golden tests). Sections (`core/RootSearch.js`):
   - empty root: Favorites, Suggestions (frecency > 1, top 6), Commands, Applications
-  - query: Results, then Files (at most 3 file-name hits for a query of 3 or more characters, or the files under a typed `~/` or `/` path, never on an exact alias; P7-4), then `Use "<q>" with…` (Google, DuckDuckGo fallbacks)
+  - query: Results, then Files (at most 3 file-name hits for a query of 3 or more characters, never on an exact alias; P7-4), then `Use "<q>" with…` (Google, DuckDuckGo fallbacks)
+  - a typed `~/` or `/` path: the Files section alone, the files under that path (P7-4)
 - **Providers:** apps from `shell.appLibrary`, the whole Omarchy menu (about 400 items, with breadcrumbs, guards, ✓ state and font/power-profile provider rows), and the built-in "Omarchy Menu".
 - **Opening an open app [D]:** ↵ on an app focuses its most recently used window, switching to its workspace, and launches only when none is open. Windows match by desktop id, `StartupWMClass`, or the URL Chromium/Brave web app classes are built from (`RootSearch.findAppWindow`). The focus waits for the `omacast` layer to unmap, since Hyprland refuses focus while it holds the keyboard. Focus doesn't raise on Omarchy 4.5's floating workspaces, so the window is then brought to the top, and one minimized to the dock is moved back first, the way the dock does it. Shift+↵ ("Open New Window") always launches.
 - **Ranking state:** frecency (+100 per launch, 10-day half-life) and learned search terms in `db/frecency.json`. Aliases (exact → top; duplicates rejected), favourites (Ctrl+Shift+F, reorder Ctrl+Alt+↑↓) and disabled commands live in `db/settings.json` `commands`.

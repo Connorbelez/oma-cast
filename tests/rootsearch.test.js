@@ -310,7 +310,8 @@ test("root files: a path query lists the files under it, busiest folder first, c
 
 test("root files: equal usage scores break on the shorter path, not the alphabet", () => {
   const rows = ["Projects/oma-cast/zz.md", "Projects/oma-cast/aaa/bbb.md"].map(fileRow)
-  assert.deepEqual(pathsOf(RS.pathHits(rows, "~/pro", pathSignals(), 3, FileRanker)), ["Projects/oma-cast/zz.md", "Projects/oma-cast/aaa/bbb.md"])
+  const noUsage = FileRanker.signals("", {}, HOME, NOW)
+  assert.deepEqual(pathsOf(RS.pathHits(rows, "~/pro", noUsage, 3, FileRanker)), ["Projects/oma-cast/zz.md", "Projects/oma-cast/aaa/bbb.md"])
 })
 
 test("root files: a path query narrows to a file name and takes an absolute path", () => {
