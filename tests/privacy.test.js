@@ -402,11 +402,11 @@ test("the content script gives rg the query on stdin only and passes on short ma
   ].join("\n"))
   const r = runContentScript(home, "my secret query\n", ignore, untouched)
   assert.equal(r.status, 0, r.stderr)
-  assert.equal(r.stdout, '{"type":"match","data":{"path":{"text":"/home/u/a.md"}}}\n{"type":"match","data":{"path":{"text":"/home/u/.config/a.md"}}}\n')
+  assert.deepEqual(r.stdout.split("\n").sort(), ["", '{"type":"match","data":{"path":{"text":"/home/u/.config/a.md"}}}', '{"type":"match","data":{"path":{"text":"/home/u/a.md"}}}'])
   const log = home + "/cmdlines"
   assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n").map((l) => l.trim().replace(/^\/bin\/bash \S+\/rg /, "rg ")).sort(), [
-    `rg --json -F -i -f - --max-count 1 --max-filesize 1M -j 32 --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`,
-    `rg --json -F -i -f - --max-count 1 --max-filesize 1M -j 32 --ignore-file ${ignore} --ignore-file ${untouched} /home/u`
+    `rg --json --line-buffered -F -i -f - --max-count 1 --max-filesize 1M -j 32 --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`,
+    `rg --json --line-buffered -F -i -f - --max-count 1 --max-filesize 1M -j 32 --ignore-file ${ignore} --ignore-file ${untouched} /home/u`
   ])
   assert.equal(fs.readFileSync(log + ".stdin", "utf8"), "my secret query\nmy secret query\n")
   const parents = fs.readFileSync(log + ".parents", "utf8")
@@ -414,13 +414,13 @@ test("the content script gives rg the query on stdin only and passes on short ma
   assert.ok(!parents.includes("secret"), parents)
 })
 
-test("the content script runs no rg without both ignore files or with an empty query, and passes on at most 1,000 files", (t) => {
+test("the content script runs no rg without both ignore files or with an empty query, and passes on at most 300 files", (t) => {
   const home = tempHome(t)
   const ignore = home + "/file-search.ignore"
   const untouched = home + "/file-search-untouched.ignore"
   fs.writeFileSync(ignore, ".ssh/\n")
   fs.writeFileSync(untouched, "")
-  fakeContentRg(home, `for i in $(seq 1500); do echo '{"type":"match","data":{"line_number":'$i'}}'; done`)
+  fakeContentRg(home, `for i in $(seq 1500); do echo '{"type":"match","data":{"path":{"text":"'"\${@: -1}"'"},"line_number":'$i'}}'; done`)
   assert.equal(runContentScript(home, "frec\n", ignore, home + "/missing.ignore").status, 3)
   fs.mkdirSync(home + "/dir.ignore")
   assert.equal(runContentScript(home, "frec\n", home + "/dir.ignore", untouched).status, 3)
@@ -430,5 +430,6 @@ test("the content script runs no rg without both ignore files or with an empty q
   const r = runContentScript(home, "frec\n", ignore, untouched)
   assert.equal(r.status, 0, r.stderr)
   const lines = r.stdout.trim().split("\n")
-  assert.deepEqual([lines.length, lines[0], lines[999]], [1000, '{"type":"match","data":{"line_number":1}}', '{"type":"match","data":{"line_number":1000}}'])
+  assert.equal(lines.length, 300)
+  for (const line of lines) assert.match(line, /^\{"type":"match","data":\{"path":\{"text":"\/home\/u(\/\.config)?"\},"line_number":\d+\}\}$/)
 })

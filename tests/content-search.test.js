@@ -170,3 +170,57 @@ test("a hide or keystroke with nothing running cancels nothing", () => {
   h.service.search({ serial: 2, query: "frec", roots: ROOTS }, () => {})
   assert.equal(h.service.cancel(), true)
 })
+
+// The content script under timeout, as ContentSearch starts it, with one fake
+// rg per root. Each prints its lines, marks that it has, and then either exits
+// or stops itself, so only the SIGTERM to timeout that kill() sends ends the
+// run.
+function killedRun(t, roots) {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "omacast-content-"))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(dir + "/ignore", ".ssh/\n")
+  fs.writeFileSync(dir + "/untouched", "")
+  fs.mkdirSync(dir + "/marks")
+  fs.writeFileSync(dir + "/rg", [
+    "#!/bin/bash",
+    "root=${@: -1}",
+    "cat >/dev/null",
+    'if [[ $root == */.config ]]; then n=$CONFIG_LINES stop=$CONFIG_STOPS; else n=$HOME_LINES stop=$HOME_STOPS; fi',
+    "for ((i = 1; i <= n; i++)); do",
+    `  printf '{"type":"match","data":{"path":{"text":"%s/f%02d.md"},"lines":{"text":"frec %s\\\\n"},"line_number":1,"submatches":[{"match":{"text":"frec"},"start":0,"end":4}]}}\\n' "$root" $i "$PAD"`,
+    "done",
+    ': >"$MARKS/${root##*/}"',
+    "[[ $stop == 1 ]] && kill -STOP $$",
+    "exit 0"
+  ].join("\n") + "\n", { mode: 0o755 })
+  const source = fs.readFileSync(path.join(__dirname, "../services/ContentSearch.qml"), "utf8")
+  const line = source.split("\n").find((l) => l.startsWith("  readonly property string searchScript: '"))
+  const script = new Function("return " + line.slice(line.indexOf("'")))()
+  const env = {
+    ...process.env, PATH: dir + ":" + process.env.PATH, MARKS: dir + "/marks", PAD: "x".repeat(roots.pad || 0),
+    HOME_LINES: String(roots.home[0]), HOME_STOPS: roots.home[1] ? "1" : "0", CONFIG_LINES: String(roots.config[0]), CONFIG_STOPS: roots.config[1] ? "1" : "0"
+  }
+  const child = require("node:child_process").spawn("timeout", ["-k", "2", "5", "bash", "-c", script, "omacast-content", HOME, HOME + "/.config", dir + "/ignore", dir + "/untouched"], { env })
+  child.stdin.end("frec\n")
+  let out = ""
+  child.stdout.on("data", (d) => { out += d })
+  return new Promise((resolve) => {
+    const poll = setInterval(() => {
+      if (fs.readdirSync(dir + "/marks").length < 2) return
+      clearInterval(poll)
+      setTimeout(() => child.kill("SIGTERM"), 100)
+    }, 10)
+    child.on("close", (_, signal) => resolve({ signal, paths: FileRanker.contentMatches(out).map((m) => m.path.slice(HOME.length + 1)) }))
+  })
+}
+
+const files = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}f${String(i + 1).padStart(2, "0")}.md`)
+
+test("a killed run delivers every line rg printed before the kill, from either root", async (t) => {
+  const short = await killedRun(t, { home: [5, true], config: [0, false] })
+  assert.deepEqual([short.signal, short.paths], ["SIGTERM", files("", 5)])
+  const long = await killedRun(t, { home: [22, true], config: [0, false], pad: 3000 })
+  assert.deepEqual([long.signal, long.paths], ["SIGTERM", files("", 22)])
+  const held = await killedRun(t, { home: [0, true], config: [5, false] })
+  assert.deepEqual([held.signal, held.paths], ["SIGTERM", files(".config/", 5)])
+})
