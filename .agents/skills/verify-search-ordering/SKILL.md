@@ -41,7 +41,7 @@ Read every result with the p3-stack `/statechart` skill, pointing it at `tests/f
 
 ### Coverage record
 
-Last confirmed against the code at commit **`10e58bc`** (sync commit).
+Last confirmed against the code at commit **`b993c7b`** (sync commit).
 
 | Code | Model | Anchor |
 |---|---|---|
@@ -53,6 +53,7 @@ Last confirmed against the code at commit **`10e58bc`** (sync commit).
 | `ui/LauncherWindow.qml` `setQuery`, `push`, `pop`, `setRootFilter`, `recallHistory` | `Edit` | shape "every query write is followed by rebuild()" |
 | `ui/LauncherWindow.qml` `onCandidatesRevisionChanged`, `onCalculatorRevisionChanged` | `Reindex` (last step), `CalcRevision` | `CalcSkipsAlert`, shapes for both conditions |
 | `Backend.qml` `searchAsync()` | `UiRebuild` (sync and async members) | shape "Backend.searchAsync answers empty queries…" |
+| `Backend.qml` `rootSearch.search` and `rootFileHits()` (the root Files section) | the reply's `rows` in `UiCallback`: ranked in the same task, so no slot of its own | shapes "the root Files section is ranked inside rootSearch.search…" and "rootFileHits ranks synchronously…" |
 | `Backend.qml` `rebuildCandidates()` | `Reindex` | `CancelOnReindex`, shape "Backend swaps ids and entries…" |
 | `services/NativeSearch.qml` `cancel()`, `search()`, `send()`, `load()` | `NsCancel`, `NsSearch`, `NsSend`, `NsLoad` | `SendOnlyWhenLoaded`, shapes for `search()` and `cancel()` |
 | `services/NativeSearch.qml` `invalidate()` (onEntriesChanged) | `NsInvalidate` | `InvalidateCancels`, shape "invalidate() unloads…" |
@@ -110,7 +111,7 @@ Don't delete these layers because the model says they're redundant: the model on
 - Real-time ordering: the model is untimed, and the 1 s timeout is just a possible event.
 - Anything outside one launcher instance.
 
-**Phase 7 file and content search** will stream ripgrep results through this same pattern of serial, pending and cancel. Add each new async source to the model as its own pending slot and reply action, with anchors, before trusting the check for it.
+The root Files section (P7-4) is not a new source: `rootSearch.search` ranks file names in the task that builds the reply, so the section rides the existing serial guard. **Phase 7 content search** will stream ripgrep results through this same pattern of serial, pending and cancel. Add each new async source to the model as its own pending slot and reply action, with anchors, before trusting the check for it.
 
 ## Moving the sync commit
 
@@ -123,7 +124,7 @@ After a covered change:
 To see what changed since the last sync:
 
 ```sh
-git diff 10e58bc -- ui/LauncherWindow.qml services/NativeSearch.qml Backend.qml search/src/protocol.rs
+git diff b993c7b -- ui/LauncherWindow.qml services/NativeSearch.qml Backend.qml search/src/protocol.rs
 ```
 
 `/maintain-formal-verification-skill` covers bringing this back in line after changes that skipped the check.
