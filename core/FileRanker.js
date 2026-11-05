@@ -37,7 +37,7 @@ function compile(query) {
       wordStartLines: new RegExp("[-_. ]" + e + "[^\\n]*", "gi"),
       substringLines: new RegExp(e + "[^\\n]*", "gi"),
       lines: new RegExp(subsequenceSource(word, "\\n") + "[^\\n]*", "gi"),
-      without: word.length === 1 ? new RegExp("^[^" + e + "\\n]*$", "gim") : null,
+      without: word.length === 1 ? new RegExp("^[^" + e + "\\n]+$", "gim") : null,
       segment: new RegExp("(?:^|/)(?:[^/]*[-_. ])?" + e, "i")
     }
   })
@@ -124,8 +124,8 @@ function usage(row, s) {
 }
 
 function score(row, s) {
-  var u = usage(row, s)
-  return Math.log(1 + u.opens / LIFT_OPENS) + 0.5 * u.recency + 0.5 * u.prior
+  var opens = s.opens[row.path]
+  return (opens ? Math.log(1 + opens / LIFT_OPENS) : 0) + 0.5 * recency(row, s) + 0.5 * prior(row.dir, s)
 }
 
 var joined = { rows: null, text: "", starts: [], byPath: null }
@@ -148,16 +148,26 @@ function joinedNames(rows) {
 }
 
 // Calls visit(index) once for each row whose name the global regex matches,
-// in list order. Every scan regex ends in [^\n]*, so it consumes the rest of
-// the name and the next match starts on a later line.
+// in list order. Every scan regex ends in [^\n]*, so a match ends at its
+// name's end and the next one starts on a later line. test() allocates no
+// match array: a one-letter query would otherwise make thousands per
+// keystroke and pull a 20 to 100 ms collection of the whole shell's heap
+// into it.
 function scanRows(listed, regex, visit) {
   regex.lastIndex = 0
   var r = 0
   var last = listed.starts.length - 1
-  for (var m = regex.exec(listed.text); m !== null; m = regex.exec(listed.text)) {
-    while (r < last && listed.starts[r + 1] <= m.index) r++
+  while (regex.test(listed.text)) {
+    while (r < last && listed.starts[r + 1] <= regex.lastIndex) r++
     visit(r)
   }
+}
+
+function countRows(listed, regex) {
+  var n = 0
+  regex.lastIndex = 0
+  while (regex.test(listed.text)) n++
+  return n
 }
 
 function hit(row, matchBand, effective, value) {
@@ -219,11 +229,10 @@ function rankWord(rows, listed, m, s, max) {
   return { hits: count(listed, m), rows: out }
 }
 
-// String.match copies every match, so for one letter, which most names
-// hold, counting the names without it is about half the cost.
+// Most names hold any one letter, so for one letter the names without it
+// are fewer to count.
 function count(listed, m) {
-  if (m.without) return listed.starts.length - (listed.text.match(m.without) || []).length
-  return (listed.text.match(m.lines) || []).length
+  return m.without ? listed.starts.length - countRows(listed, m.without) : countRows(listed, m.lines)
 }
 
 // Several words: the last word's subsequence scan finds the candidates and
