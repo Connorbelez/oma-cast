@@ -312,7 +312,7 @@ Item {
   function openWithOptions() {
     return backend.appEntries().map(function(e) {
       return { id: e.id, title: String(e.name || e.id), shortcut: "", section: "apps", icon: " " }
-    })
+    }).sort(function(a, b) { return a.title.localeCompare(b.title) })
   }
 
   function fileAction(data) {

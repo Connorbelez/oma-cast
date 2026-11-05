@@ -88,6 +88,7 @@ PanelWindow {
   property string previewFor: ""
   property int previewSerial: 0
   property double previewStartedAt: 0
+  property double previewSelectedAt: 0
   property bool previewLogged: false
   property bool quickLook: false
 
@@ -299,6 +300,7 @@ PanelWindow {
     window.previewSerial++
     window.backend.cancelPreview()
     window.previewFor = path
+    window.previewSelectedAt = Date.now()
     window.preview = null
     if (!path) window.quickLook = false
     if (path) previewDelay.restart()
@@ -333,7 +335,8 @@ PanelWindow {
   function previewReady(kind) {
     if (window.previewLogged || !window.preview) return
     window.previewLogged = true
-    window.backend.log("info", "", "files: preview " + kind + " " + (Date.now() - window.previewStartedAt) + " ms")
+    var now = Date.now()
+    window.backend.log("info", "", "files: preview " + kind + " " + (now - window.previewStartedAt) + " ms, " + (now - window.previewSelectedAt) + " ms after the selection")
   }
 
   function move(delta) {
@@ -997,7 +1000,7 @@ PanelWindow {
       }
 
       Rectangle {
-        visible: window.filesView && !window.quickLook
+        visible: window.filesView && !window.quickLook && rows.count > 0
         x: list.width + window.px(4)
         anchors.top: parent.top
         anchors.bottom: parent.bottom
