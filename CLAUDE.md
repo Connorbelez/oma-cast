@@ -116,7 +116,7 @@ Renamed **raylinux → oma-launcher → oma-cast** on 2026-10-19, then **oma-cas
 
 **Phase 1 (Quickshell build): done**, with the gaps listed below. **Phase 0: done.** Omarchy 4.0.0.alpha, Quickshell 0.3.2, Hyprland 0.56.2.
 
-**Phase 7 (file search): planned, not built.** Decisions in SPEC.md §8.6, the stacked-PR plan in `docs/phase7-file-search-plan.md`, measurements and scripts in `docs/phase7-prototypes/`.
+**Phase 7 (file search): partly built, not merged.** P7-1 (the file list, large untouched subtrees, the toast) and P7-2 (the Search Files view and `core/FileRanker.js`) are built on the stacked PRs 3 and 4 and not yet merged; the rest is planned. Decisions in SPEC.md §8.6, the stacked-PR plan in `docs/phase7-file-search-plan.md`, measurements and scripts in `docs/phase7-prototypes/`.
 
 Works:
 - **Root search** ported from ref 02 §4.2–4.6 (`core/Ranker.js`, `core/Frecency.js`, golden tests). Sections (`core/RootSearch.js`):

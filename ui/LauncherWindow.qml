@@ -98,6 +98,7 @@ PanelWindow {
   readonly property string placeholder: window.view.kind === "alias" ? "Type an alias, then press ↵"
     : window.view.kind === "menu" ? "Search " + window.view.title + "…"
     : window.view.kind === "calculator-history" ? "Search calculations…"
+    : window.view.kind === "files" ? "Search files…"
     : "Search for apps and commands…"
 
   readonly property int cardWidth: Math.min(px(750), width - Style.gapsOut * 2)
@@ -186,7 +187,10 @@ PanelWindow {
     window.searchPending = true
     var revision = window.backend.candidatesRevision
     window.backend.searchAsync({ query: window.query, view: window.view, filter: window.atRoot ? window.rootFilter : "all" }, function(result) {
-      if (serial !== window.searchSerial || revision !== window.backend.candidatesRevision) return
+      if (serial !== window.searchSerial || revision !== window.backend.candidatesRevision) {
+        window.backend.log("info", "search", "dropped a reply for an older query")
+        return
+      }
       window.applySearch(result, keepId, restoreIndex)
       window.searchPending = false
     })
@@ -658,6 +662,7 @@ PanelWindow {
     // Not under an alert: onCandidatesRevisionChanged skips that rebuild, so a
     // search started here could be cancelled with nothing left to settle it.
     function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert && window.query) window.rebuild(false) }
+    function onFilesRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert && window.view.kind === "files") window.rebuild(false) }
   }
 
 
@@ -921,6 +926,7 @@ PanelWindow {
           textFormat: Text.PlainText
           text: window.view.kind === "alias" ? window.view.title
             : window.view.kind === "calculator-history" && !window.query ? "No Calculations Yet"
+            : window.view.kind === "files" && !window.query ? "No Recent Files"
             : (window.backend.ready ? "No results" : "Loading…")
           color: window.look.foreground
           font.family: window.look.fontFamily
@@ -930,7 +936,8 @@ PanelWindow {
           anchors.horizontalCenter: parent.horizontalCenter
           textFormat: Text.PlainText
           text: window.view.kind === "alias" ? "Typing the alias exactly in the root search puts this command on top. Leave it empty to remove it."
-            : window.view.kind === "calculator-history" && !window.query ? "Type a calculation in the root search, then copy or paste the answer." : ""
+            : window.view.kind === "calculator-history" && !window.query ? "Type a calculation in the root search, then copy or paste the answer."
+            : window.view.kind === "files" && !window.query ? "Type part of a file name. Files you open show up here." : ""
           visible: text.length > 0
           color: window.look.foreground
           opacity: 0.55
