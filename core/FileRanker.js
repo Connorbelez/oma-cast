@@ -194,9 +194,10 @@ function countRows(listed, m) {
 
 // A band's hits as parallel arrays of numbers. Objects for thousands of hits
 // per keystroke made the search the likeliest place for the shell's
-// collector to run.
-function bucket() {
-  return { at: [], band: [], score: [] }
+// collector to run. A loose bucket holds unlifted subsequence matches, which
+// a Contents section replaces.
+function bucket(loose) {
+  return { at: [], band: [], score: [], loose: !!loose }
 }
 
 function add(b, r, matchBand, value) {
@@ -219,7 +220,7 @@ function take(out, rows, b, max) {
   for (var i = 0; i < b.at.length; i++) {
     if (b.score[i] < cut) continue
     var row = rows[b.at[i]]
-    shown.push({ path: row.path, name: row.name, dir: row.dir, band: b.band[i], score: b.score[i] })
+    shown.push({ path: row.path, name: row.name, dir: row.dir, band: b.band[i], score: b.score[i], loose: b.loose })
   }
   shown.sort(byScore)
   for (var j = 0; j < shown.length && out.length < max; j++) out.push(shown[j])
@@ -236,7 +237,7 @@ function liftedBand(matchBand, opens) {
 // scores only the bands it shows.
 function rankWord(rows, listed, m, s, max) {
   var seen = new Uint8Array(rows.length)
-  var buckets = [bucket(), bucket(), bucket(), bucket(), bucket()]
+  var buckets = [bucket(), bucket(), bucket(), bucket(), bucket(true)]
   Object.keys(s.opens).forEach(function(path) {
     var r = listed.byPath[path]
     if (r === undefined) return
@@ -398,8 +399,72 @@ function recent(rows, s, limit) {
   return s.recent.result
 }
 
+// Content search (SPEC §8.6). Contents show for a query of at least 3
+// characters that has fewer than 5 name hits or a space, or for any such
+// query when the Contents dropdown forces them.
+var CONTENT_MIN_CHARS = 3
+var CONTENT_NAME_HITS = 5
+var CONTENT_ROWS = 20
+var SNIPPET_LEAD = 16
+var SNIPPET_MAX = 200
+
+// Names holding the whole query, ignoring case: bands 0 to 3 for one word.
+// Subsequence hits stay out, because "frec" has 318 of them and 2 of these.
+function nameHits(rows, query) {
+  var q = String(query || "").trim()
+  return q ? countIn(joinedNames(rows).text, new RegExp(escapeRegExp(q) + "[^\\n]*", "gi")) : 0
+}
+
+function revealContent(query, hits, forced) {
+  var q = String(query || "").trim()
+  return q.length >= CONTENT_MIN_CHARS && (!!forced || /\s/.test(q) || hits < CONTENT_NAME_HITS)
+}
+
+// The matching line trimmed, and at most 200 characters. A match more than
+// 16 characters in starts the text at the word that holds it, or at the
+// match in a word that long, because the list pane shows about 30
+// characters of a subtitle.
+function snippet(line, match) {
+  var text = line.replace(/[\u0000-\u001f\u007f]+/g, " ").trim()
+  var at = match ? text.indexOf(match) : -1
+  if (at > SNIPPET_LEAD) text = "…" + text.slice(text.lastIndexOf(" ", at - 1) + 1 || at)
+  return text.length > SNIPPET_MAX ? text.slice(0, SNIPPET_MAX) : text
+}
+
+// rg --json match lines into { path, line, text }. A line rg could print
+// only as bytes, because it is not UTF-8, has no text. A path that is not
+// UTF-8, and a line cut short by a kill, are skipped.
+function contentMatches(output) {
+  var out = []
+  String(output || "").split("\n").forEach(function(line) {
+    if (line.indexOf('{"type":"match"') !== 0) return
+    var data
+    try { data = JSON.parse(line).data } catch (e) { return }
+    var path = data && data.path && data.path.text
+    if (typeof path !== "string" || path.indexOf("/") !== 0) return
+    var text = data.lines && typeof data.lines.text === "string" ? data.lines.text : ""
+    var first = data.submatches && data.submatches[0] && data.submatches[0].match
+    out.push({ path: path, line: Number(data.line_number) || 0, text: snippet(text, first && typeof first.text === "string" ? first.text : "") })
+  })
+  return out
+}
+
+// Listed files only, so every row opens through files.open. The best folder
+// prior first, then the shorter path, at most 20.
+function contentRows(matches, s, rows) {
+  var listed = joinedNames(rows).byPath
+  return matches.filter(function(m) { return listed[m.path] !== undefined }).map(function(m) {
+    return { match: m, prior: prior(m.path.slice(0, m.path.lastIndexOf("/")), s) }
+  }).sort(function(a, b) {
+    var p = a.match.path, q = b.match.path
+    return b.prior - a.prior || p.length - q.length || (p < q ? -1 : p > q ? 1 : 0)
+  }).slice(0, CONTENT_ROWS).map(function(r) { return r.match })
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
-    band: band, signals: signals, usage: usage, score: score, prepare: prepare, rank: rank
+    band: band, signals: signals, usage: usage, score: score, prepare: prepare, rank: rank,
+    CONTENT_MIN_CHARS: CONTENT_MIN_CHARS, nameHits: nameHits, revealContent: revealContent,
+    contentMatches: contentMatches, contentRows: contentRows
   }
 }

@@ -70,7 +70,8 @@ PanelWindow {
   property var toast: null
   property int historyIndex: -1
 
-  // Ctrl+P root filter (RootSearch.FILTERS), Ctrl+T toast actions,
+  // Ctrl+P filter (RootSearch.FILTERS at the root, Names / Contents in
+  // Search Files), Ctrl+T toast actions,
   // Ctrl+Shift+K About panel and the confirm alert.
   property string rootFilter: "all"
   property bool dropdownOpen: false
@@ -92,6 +93,18 @@ PanelWindow {
   property bool previewLogged: false
   property bool quickLook: false
 
+  // The files view's Contents section (SPEC §8.6). Once the query has been
+  // still for 150 ms [I], Backend.searchContents runs the reveal rule and rg.
+  // The request carries searchSerial, a reply for an older serial is
+  // dropped, and every rebuild and hide kills the running search. The
+  // Names / Contents dropdown on Ctrl+P forces it and hides the name rows.
+  readonly property var fileFilters: [{ id: "names", title: "Names" }, { id: "contents", title: "Contents" }]
+  readonly property bool contentsForced: window.filesView && window.view.filter === "contents"
+  readonly property bool contentsComing: window.filesView && window.query.trim().length >= window.backend.contentMinChars
+    && (contentDelay.running || window.backend.contentsSearching)
+  property double rebuiltAt: 0
+  property double contentsShownAt: 0
+
   // Inline argument pills for the selected command: argFocus -1 is the
   // search field, 0.. an argument.
   property var argDefs: []
@@ -107,6 +120,8 @@ PanelWindow {
   readonly property string actionPanelKeys: window.vim ? "Alt K" : "Ctrl K"
 
   readonly property bool atRoot: window.stack.length === 1
+  readonly property var filters: window.atRoot ? RootSearch.FILTERS : window.filesView ? window.fileFilters : []
+  readonly property string filterId: window.atRoot ? window.rootFilter : window.contentsForced ? "contents" : "names"
   readonly property bool compact: window.general.windowMode === "compact" && window.atRoot && !window.query
   readonly property string placeholder: window.view.kind === "alias" ? "Type an alias, then press ↵"
     : window.view.kind === "menu" ? "Search " + window.view.title + "…"
@@ -151,6 +166,7 @@ PanelWindow {
     if (window.shown) return
     window.searchSerial++
     window.backend.cancelSearch()
+    window.cancelContents()
     window.searchPending = false
     window.closePopups()
     window.clearPreview()
@@ -195,6 +211,7 @@ PanelWindow {
   function rebuild(resetSelection, restoreIndex) {
     var serial = ++window.searchSerial
     window.backend.cancelSearch()
+    window.cancelContents()
     pointerGate.reset()
     var keepId = !resetSelection && window.selectedRow ? window.selectedRow.itemId : ""
     window.searchPending = false
@@ -202,6 +219,8 @@ PanelWindow {
     window.searchPending = true
     var revision = window.backend.candidatesRevision
     var startedAt = Date.now()
+    window.rebuiltAt = startedAt
+    if (window.filesView) contentDelay.restart()
     window.backend.searchAsync({ query: window.query, view: window.view, filter: window.atRoot ? window.rootFilter : "all" }, function(result) {
       if (serial !== window.searchSerial || revision !== window.backend.candidatesRevision) {
         window.backend.log("info", "search", "dropped a reply for an older query")
@@ -235,12 +254,61 @@ PanelWindow {
     else window.select(keepIndex >= 0 ? keepIndex : window.nextSelectable(-1, 1))
   }
 
+  Timer {
+    id: contentDelay
+    interval: 150
+    onTriggered: window.searchContents()
+  }
+
+  function cancelContents() {
+    contentDelay.stop()
+    window.backend.cancelContents()
+  }
+
+  function searchContents() {
+    var serial = window.searchSerial
+    window.backend.searchContents({ query: window.query, serial: serial, forced: window.contentsForced }, function(reply) {
+      if (reply.serial !== window.searchSerial) {
+        window.backend.log("info", "", "content: dropped a reply for an older query")
+        return
+      }
+      window.applyContents(reply)
+    })
+  }
+
+  // The Contents section goes below the name rows in one change, in place of
+  // the loose subsequence rows at their tail (and their header when no other
+  // row is left).
+  function applyContents(reply) {
+    if (!reply.rows.length) return
+    var cut = rows.count
+    while (cut > 0 && rows.get(cut - 1).loose) cut--
+    if (cut < rows.count && cut > 0 && rows.get(cut - 1).rowKind === "section") cut--
+    if (cut < rows.count) rows.remove(cut, rows.count - cut)
+    rows.append([window.rowData({ id: "section:contents", title: "Contents" }, "section")].concat(reply.rows.map(function(c) {
+      return window.rowData(c, "item")
+    })))
+    if (window.selectedIndex < 0 || window.selectedIndex >= cut) window.select(window.nextSelectable(cut, 1))
+    window.contentsShownAt = Date.now()
+  }
+
+  // With "logLevel": "debug", the time from the last keystroke's rebuild to
+  // the first frame that shows the Contents section.
+  Connections {
+    target: window.contentsShownAt > 0 ? card.Window.window : null
+    function onFrameSwapped() {
+      window.backend.log("debug", "search", "contents painted " + (Date.now() - window.rebuiltAt) + " ms after the keystroke")
+      window.contentsShownAt = 0
+    }
+  }
+
   function rowData(c, kind) {
     return {
       rowKind: kind,
       itemId: String(c.id || ""),
       title: String(c.title || ""),
       subtitle: String(c.subtitle || ""),
+      where: String(c.where !== undefined ? c.where : c.subtitle || ""),
       glyph: String(c.glyph || ""),
       glyphFont: String(c.glyphFont || ""),
       iconName: String(c.iconName || ""),
@@ -249,6 +317,7 @@ PanelWindow {
       checked: !!c.checked,
       disabled: !!c.disabled,
       favorite: typeof c.favoriteOrder === "number",
+      loose: !!c.loose,
       calcInput: String(c.calcInput || ""),
       calcResult: String(c.calcResult || ""),
       calcInputCaption: String(c.calcInputCaption || ""),
@@ -445,17 +514,24 @@ PanelWindow {
   }
 
   function toggleDropdown() {
-    if (window.dropdownOpen || !window.atRoot) { window.dropdownOpen = false; return }
+    if (window.dropdownOpen || !window.filters.length) { window.dropdownOpen = false; return }
     window.dropdownOpen = true
     dropdown.item.filter = ""
-    var at = RootSearch.FILTERS.map(function(f) { return f.id }).indexOf(window.rootFilter)
+    var at = window.filters.map(function(f) { return f.id }).indexOf(window.filterId)
     dropdown.item.selectedIndex = Math.max(0, at)
   }
 
-  function setRootFilter(id) {
+  // The root keeps its filter on the window; a pushed view keeps its own, so
+  // a new Search Files view starts on Names.
+  function setFilter(id) {
     window.dropdownOpen = false
-    if (window.rootFilter === id) return
-    window.rootFilter = id
+    if (window.filterId === id) return
+    if (window.atRoot) window.rootFilter = id
+    else {
+      var next = window.stack.slice()
+      next[next.length - 1] = Object.assign({}, window.view, { filter: id })
+      window.stack = next
+    }
     window.rebuild(true)
   }
 
@@ -914,7 +990,7 @@ PanelWindow {
 
       Rectangle {
         id: filterButton
-        visible: window.atRoot && !window.compact
+        visible: window.filters.length > 0 && !window.compact
         anchors.right: parent.right
         anchors.rightMargin: window.px(16)
         anchors.verticalCenter: parent.verticalCenter
@@ -933,9 +1009,9 @@ PanelWindow {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: (RootSearch.FILTERS.filter(function(f) { return f.id === window.rootFilter })[0] || RootSearch.FILTERS[0]).title
+            text: (window.filters.filter(function(f) { return f.id === window.filterId })[0] || window.filters[0] || { title: "" }).title
             color: window.look.foreground
-            opacity: window.rootFilter === "all" ? 0.7 : 1
+            opacity: window.filters.length && window.filterId !== window.filters[0].id ? 1 : 0.7
             font.family: window.look.fontFamily
             font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
           }
@@ -1022,7 +1098,7 @@ PanelWindow {
         color: window.quickLook ? window.look.background : "transparent"
         preview: window.preview
         title: window.selectedRow ? window.selectedRow.title : ""
-        subtitle: window.selectedRow ? window.selectedRow.subtitle : ""
+        subtitle: window.selectedRow ? window.selectedRow.where : ""
         look: window.look
         zoom: window.zoom
         onReady: function(kind) { window.previewReady(kind) }
@@ -1053,6 +1129,8 @@ PanelWindow {
           textFormat: Text.PlainText
           text: window.view.kind === "alias" ? window.view.title
             : window.view.kind === "calculator-history" && !window.query ? "No Calculations Yet"
+            : window.contentsComing ? "Searching Contents…"
+            : window.contentsForced && window.query.trim().length < window.backend.contentMinChars ? "Search Contents"
             : window.view.kind === "files" && !window.query ? "No Recent Files"
             : (window.backend.ready ? "No results" : "Loading…")
           color: window.look.foreground
@@ -1064,6 +1142,8 @@ PanelWindow {
           textFormat: Text.PlainText
           text: window.view.kind === "alias" ? "Typing the alias exactly in the root search puts this command on top. Leave it empty to remove it."
             : window.view.kind === "calculator-history" && !window.query ? "Type a calculation in the root search, then copy or paste the answer."
+            : window.contentsComing ? ""
+            : window.contentsForced && window.query.trim().length < window.backend.contentMinChars ? "Type " + window.backend.contentMinChars + " or more characters to search inside files."
             : window.view.kind === "files" && !window.query ? "Type part of a file name. Files you open show up here." : ""
           visible: text.length > 0
           color: window.look.foreground
@@ -1214,12 +1294,12 @@ PanelWindow {
       anchors.topMargin: window.px(4)
       sourceComponent: ActionPanel {
         placeholder: "Filter…"
-        actions: RootSearch.FILTERS.map(function(f) {
-          return { id: f.id, title: f.title, shortcut: "", section: "filter", icon: f.id === window.rootFilter ? "✓" : " " }
+        actions: window.filters.map(function(f) {
+          return { id: f.id, title: f.title, shortcut: "", section: "filter", icon: f.id === window.filterId ? "✓" : " " }
         })
         look: window.look
         zoom: window.zoom
-        onActivated: function(id) { window.setRootFilter(id) }
+        onActivated: function(id) { window.setFilter(id) }
       }
     }
 

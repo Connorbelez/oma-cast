@@ -63,15 +63,19 @@ const RG_OUTPUT = [
 test("rg --json match lines become { path, line, text } with the matching line trimmed", () => {
   assert.deepEqual(FileRanker.contentMatches(RG_OUTPUT), [
     { path: HOME + "/Projects/oma-cast/core/Frecency.js", line: 12, text: "const score = Frecency.score(anchor)" },
-    { path: HOME + "/Dev/notes/long.md", line: 3, text: "…the frecency of a file decays" },
+    { path: HOME + "/Dev/notes/long.md", line: 3, text: "…frecency of a file decays" },
     { path: HOME + "/Dev/latin.txt", line: 1, text: "" }
   ])
   assert.deepEqual(FileRanker.contentMatches(""), [])
 })
 
-test("a matching line longer than 200 characters is cut after 200", () => {
+test("a matching line longer than 200 characters is cut after 200, and a match in a long word starts it", () => {
   const [m] = FileRanker.contentMatches(match(HOME + "/a.txt", "frecency " + "y".repeat(400), 1, "frec"))
   assert.equal(m.text, "frecency " + "y".repeat(191))
+  const [w] = FileRanker.contentMatches(match(HOME + "/b.txt", "import \"core/Frecency.js\" as Frecency", 1, "Frec"))
+  assert.equal(w.text, "import \"core/Frecency.js\" as Frecency")
+  const [x] = FileRanker.contentMatches(match(HOME + "/c.txt", "a".repeat(30) + "Frecency", 1, "Frec"))
+  assert.equal(x.text, "…Frecency")
 })
 
 test("content rows keep listed files only, best folder prior first, then the shorter path, at most 20", () => {
@@ -93,6 +97,14 @@ test("content rows keep listed files only, best folder prior first, then the sho
     "Music/m07.txt", "Music/m08.txt", "Music/m09.txt", "Music/m10.txt", "Music/m11.txt", "Music/m12.txt", "Music/m13.txt", "Music/m14.txt"
   ])
   assert.deepEqual(FileRanker.contentRows(matches.slice(0, 1), s, listed), [{ path: HOME + "/Music/a-much-longer-name.txt", line: 1, text: "t" }])
+})
+
+test("subsequence-only name rows are loose, so contents replace them, unless an open lifts them", () => {
+  const files = ["Projects/oma-cast/core/Frecency.js", "Dev/tf1-worker-mutation.cjs", "Dev/funding-recon.md"].map(row)
+  const s = FileRanker.signals("", { [HOME + "/Dev/funding-recon.md"]: 101 }, HOME, 1_700_000_000_000)
+  assert.deepEqual(FileRanker.rank(files, "frec", s).rows.map((r) => [r.name, r.band, r.loose]), [
+    ["Frecency.js", 1, false], ["funding-recon.md", 4, false], ["tf1-worker-mutation.cjs", 4, true]
+  ])
 })
 
 // ContentSearch.qml's functions run against stand-ins for its Process and

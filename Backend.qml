@@ -274,7 +274,7 @@ Item {
   }
 
   function fileHit(r) {
-    return { id: "file:" + r.path, path: r.path, title: r.name, subtitle: FileIndex.displayPath(r.dir, backend.paths.home), band: r.band, score: r.score }
+    return { id: "file:" + r.path, path: r.path, title: r.name, subtitle: FileIndex.displayPath(r.dir, backend.paths.home), band: r.band, score: r.score, loose: r.loose }
   }
 
   // Ranked in the same JS task as the reply that carries the flea hits, so
@@ -291,7 +291,9 @@ Item {
 
   function fileSections(query) {
     var rows = backend.searchFiles(query, backend.fileRowsLimit).rows.map(function(r) {
-      return { candidate: RootSearch.fileCandidate(r) }
+      var c = RootSearch.fileCandidate(r)
+      c.loose = r.loose
+      return { candidate: c }
     })
     if (!rows.length) return []
     return [{ id: query.trim() ? "files" : "recent-files", title: query.trim() ? "Files" : "Recent & frequent files", rows: rows }]
@@ -360,6 +362,46 @@ Item {
         return {}
     }
     throw new Error("Unknown action " + action)
+  }
+
+  // ------------------------------------------------------- content search
+
+  readonly property int contentMinChars: FileRanker.CONTENT_MIN_CHARS
+  readonly property bool contentsSearching: contentSearch.pending !== null
+  property var lastContents: null
+
+  function cancelContents() { contentSearch.cancel() }
+
+  // The Search Files view's Contents section, a sibling of searchAsync. The
+  // reply carries the view's serial, so the view drops one for an older
+  // query. Returns false when the reveal rule keeps contents hidden.
+  function searchContents(data, callback) {
+    var query = String(data && data.query || "").trim()
+    if (!FileRanker.revealContent(query, FileRanker.nameHits(fileLister.rows, query), !!(data && data.forced))) return false
+    contentSearch.search({ serial: data.serial, query: query, roots: fileLister.defaultRoots }, function(reply) {
+      var rows = FileRanker.contentRows(reply.matches, backend.fileSignals(), fileLister.rows).map(backend.contentHit)
+      callback({ serial: reply.serial, rows: rows, ms: reply.ms, killed: reply.killed })
+    })
+    return true
+  }
+
+  // A content row is a listed file, so files.open and every file action
+  // take it. The subtitle is the matching line, or the folder when rg could
+  // not print the line as text.
+  function contentHit(m) {
+    var where = FileIndex.displayPath(m.path.slice(0, m.path.lastIndexOf("/")), backend.paths.home)
+    var c = RootSearch.fileCandidate({ id: "file:" + m.path, path: m.path, title: m.path.slice(m.path.lastIndexOf("/") + 1), subtitle: m.text || where })
+    c.where = where
+    c.line = m.line
+    return c
+  }
+
+  ContentSearch {
+    id: contentSearch
+    home: backend.paths.home
+    ignoreFile: fileLister.ignoreFile
+    untouchedFile: fileLister.untouchedFile
+    onMessage: function(level, text) { backend.log(level, "", text) }
   }
 
   FileActions {
@@ -614,7 +656,7 @@ Item {
         var sections
         if (view && view.kind === "menu") sections = RootSearch.submenuSections(backend.candidates, view.menuId, query, ctx, backend.deps)
         else if (view && view.kind === "calculator-history") sections = RootSearch.historySections(calculatorStore.doc.history, query, ctx.nowMs, Calculator.filterHistory)
-        else if (view && view.kind === "files") sections = backend.fileSections(query)
+        else if (view && view.kind === "files") sections = view.filter === "contents" ? [] : backend.fileSections(query)
         else {
           ctx.filter = String(data && data.filter || "all")
           if (query.trim() && ctx.filter === "all") ctx.calculation = backend.calculate(query)
@@ -735,6 +777,21 @@ Item {
         return backend.searchFiles(String(data && data.query || ""), limit)
       },
       open: function(data) { return backend.openFile(data && data.path) },
+      // The first call starts a search and answers { pending: true }, or
+      // { revealed: false } when the reveal rule says no; the next call for
+      // the same query answers the reply once it has landed.
+      searchContents: function(data) {
+        var query = String(data && data.query || "").trim()
+        var last = backend.lastContents
+        if (last && last.query === query) {
+          backend.lastContents = null
+          return last
+        }
+        var started = backend.searchContents({ query: query, serial: Number(data && data.serial) || 0, forced: !!(data && data.forced) }, function(reply) {
+          backend.lastContents = Object.assign({ query: query }, reply)
+        })
+        return started ? { query: query, pending: true } : { query: query, revealed: false }
+      },
       preview: function(data) {
         var path = fileActions.listedPath(data && data.path, fileLister.rows)
         if (backend.lastPreview && backend.lastPreview.path === path) return backend.lastPreview
