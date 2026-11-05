@@ -3,6 +3,7 @@ const assert = require("node:assert/strict")
 const fs = require("node:fs")
 const path = require("node:path")
 const FileRanker = require("../core/FileRanker.js")
+const Frecency = require("../core/Frecency.js")
 const fixture = require("./fixtures/files-query-set.json")
 
 const HOME = fixture.home
@@ -49,6 +50,21 @@ test("the lift moves an opened substring match above unopened word-start matches
   const unopened = FileRanker.signals(fixture.probe, {}, HOME, fixture.nowMs)
   const plain = FileRanker.rank(rows, "launch", unopened).rows.map((r) => r.name)
   assert.deepEqual(plain.slice(4), ["quick_launch.sh", "app-launcher.svg", "EpicGamesLauncher-2.1.0-x86_64.AppImage", "lava-unicode-chart.html"])
+})
+
+test("one open lifts a substring match above word-start matches for its 10-day half-life", () => {
+  const files = ["Downloads/ckage-a.txt", "Downloads/x-ckage.txt", "Dev/sales-crm/package.json", "Downloads/zzckagezz.txt"].map(row)
+  const openedSec = fixture.nowMs / 1000
+  const anchor = Frecency.recordVisit(null, fixture.nowMs).anchor
+  const after = (days) => {
+    const nowSec = openedSec + days * 86400
+    const opens = { [HOME + "/Dev/sales-crm/package.json"]: Frecency.score(anchor, nowSec) }
+    return FileRanker.rank(files, "ckage", FileRanker.signals("", opens, HOME, nowSec * 1000)).rows.map((r) => r.name)
+  }
+  assert.deepEqual([0, 9, 11].map((days) => Frecency.score(anchor, openedSec + days * 86400).toFixed(1)), ["101.0", "54.1", "47.1"])
+  assert.deepEqual(after(0), ["ckage-a.txt", "package.json", "x-ckage.txt", "zzckagezz.txt"])
+  assert.deepEqual(after(9), ["ckage-a.txt", "package.json", "x-ckage.txt", "zzckagezz.txt"])
+  assert.deepEqual(after(11), ["ckage-a.txt", "x-ckage.txt", "package.json", "zzckagezz.txt"])
 })
 
 test("oma spec finds SPEC.md by the path band", () => {

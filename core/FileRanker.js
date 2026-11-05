@@ -4,7 +4,8 @@
 // helper's, absent here), 6 path only. Matching never loops over characters:
 // Qt's JS engine runs such a loop 25 times slower than node.
 
-var LIFT_OPENS = 100
+var OPEN_SCALE = 100
+var LIFT_FRECENCY = 50
 var RECENCY_HALF_LIFE_DAYS = 30
 var ACTIVE_PROJECT_WEIGHT = 2
 var BANDS = 7
@@ -97,7 +98,7 @@ function signals(probeText, opens, home, nowMs) {
   Object.keys(opens || {}).forEach(function(path) {
     if (!(opens[path] > 1)) return
     opened[path] = opens[path]
-    var weight = Math.log(1 + opened[path] / LIFT_OPENS)
+    var weight = Math.log(1 + opened[path] / OPEN_SCALE)
     for (var d = path.slice(0, path.lastIndexOf("/")); d.length > home.length; d = d.slice(0, d.lastIndexOf("/"))) add(d, weight)
   })
   return { home: home, nowMs: nowMs, opens: opened, dirWeight: dirWeight, priorCache: Object.create(null) }
@@ -126,7 +127,7 @@ function usage(row, s) {
 
 function score(row, s) {
   var opens = s.opens[row.path]
-  return (opens ? Math.log(1 + opens / LIFT_OPENS) : 0) + 0.5 * recency(row, s) + 0.5 * prior(row.dir, s)
+  return (opens ? Math.log(1 + opens / OPEN_SCALE) : 0) + 0.5 * recency(row, s) + 0.5 * prior(row.dir, s)
 }
 
 var joined = { rows: null, text: "", starts: [], byPath: null, sample: "", sampled: 0, dirs: null, dirList: [], folders: null }
@@ -222,9 +223,10 @@ function take(out, rows, b, max) {
 }
 
 // A file opened from omacast within its half-life moves up one band, but
-// never into exact or prefix: band 2 stays, 3 to 6 move up one.
+// never into exact or prefix: band 2 stays, 3 to 6 move up one. One open
+// scores 101 and halves every 10 days, so 50 keeps it lifted for 10 days.
 function liftedBand(matchBand, opens) {
-  return matchBand >= 3 && opens >= LIFT_OPENS ? matchBand - 1 : matchBand
+  return matchBand >= 3 && opens >= LIFT_FRECENCY ? matchBand - 1 : matchBand
 }
 
 // A scan per band, best first, so a one-letter query with thousands of hits
@@ -374,7 +376,7 @@ function recent(rows, s, limit) {
       dirPrior = prior(dir, s)
     }
     var opens = s.opens[row.path]
-    values[r] = (opens ? Math.log(1 + opens / LIFT_OPENS) : 0) + 0.5 * recency(row, s) + 0.5 * dirPrior
+    values[r] = (opens ? Math.log(1 + opens / OPEN_SCALE) : 0) + 0.5 * recency(row, s) + 0.5 * dirPrior
     if (values[r] > 0) hits++
   }
   var cut = hits > max ? cutFor(values, max) : 0
@@ -388,6 +390,6 @@ function recent(rows, s, limit) {
 
 if (typeof module !== "undefined") {
   module.exports = {
-    LIFT_OPENS: LIFT_OPENS, band: band, signals: signals, usage: usage, prepare: prepare, rank: rank
+    band: band, signals: signals, usage: usage, prepare: prepare, rank: rank
   }
 }
