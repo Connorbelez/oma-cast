@@ -83,10 +83,11 @@ function band(query, row, home) {
 // The folder prior: each directory's weight is ln(1 + its zoxide score),
 // plus 2 for an active git repo, plus ln(1 + opens / 100) for every omacast
 // open below it. zoxide scores reach the hundreds, and taken raw a 40-point
-// folder outranked a fifty-times-opened file. probeText is FileLister's signal probe output: zoxide's "score path"
-// lines and "<repo>/.git/logs/HEAD" lines. opens maps absolute paths to
-// their frecency score, which bottoms out at 1 once every open has decayed,
-// so 1 counts as no usage, as it does in root search.
+// folder outranked a fifty-times-opened file. probeText is FileLister's
+// signal probe output: zoxide's "score path" lines and
+// "<repo>/.git/logs/HEAD" lines. opens maps absolute paths to their frecency
+// score, which bottoms out at 1 once every open has decayed, so 1 counts as
+// no usage, as it does in root search.
 function signals(probeText, opens, home, nowMs) {
   var dirWeight = Object.create(null)
   function add(dir, weight) { dirWeight[dir] = (dirWeight[dir] || 0) + weight }
@@ -361,10 +362,11 @@ function cutFor(values, k) {
   return heap.length === k ? heap[0] : 0
 }
 
-// The empty query ranks by usage alone, files opened from omacast first: a
-// folder's zoxide score has no ceiling, so in one blend the untouched files
-// of a busy folder outranked a file opened twice. Its rows depend only on
-// the list and the signals, so they are kept on the signals object.
+// The empty query ranks by usage alone and lists files opened from omacast
+// first. A folder's zoxide score has no ceiling, so in one blend the
+// untouched files of a busy folder outranked a file opened twice. Its rows
+// depend only on the list and the signals, so they are kept on the signals
+// object.
 function recent(rows, s, limit) {
   var max = limit > 0 ? limit : Infinity
   var cached = s.recent

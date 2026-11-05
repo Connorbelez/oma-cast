@@ -142,9 +142,9 @@ test("a limit keeps the best rows of the full order and the full hit count", () 
   assert.deepEqual(counts, { "": 164, readme: 13, s: 87, launch: 8, e: 182, "sales readme": 6 })
 })
 
-test("a busy zoxide folder never outranks files opened from omacast", () => {
+test("a folder at zoxide 40 outranks neither a twice-opened file in the empty query nor a fifty-times-opened README", () => {
   const files = ["Work/a.txt", "Work/b.txt", "Work/c.txt", "Work/d.txt", "Work/README.md", "Downloads/invoice.pdf", "Downloads/README.md"].map(row)
-  const busy = "  40.0 /home/u/Work\n"
+  const busy = "  40.0 " + HOME + "/Work\n"
   const invoice = FileRanker.signals(busy, { [HOME + "/Downloads/invoice.pdf"]: 201 }, HOME, fixture.nowMs)
   assert.deepEqual(FileRanker.rank(files, "", invoice, 4).rows.map(short), ["Downloads/invoice.pdf", "Work/a.txt", "Work/b.txt", "Work/c.txt"])
   const readme = FileRanker.signals(busy, { [HOME + "/Downloads/README.md"]: 5000 }, HOME, fixture.nowMs)
