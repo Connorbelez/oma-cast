@@ -370,7 +370,7 @@ Item {
   readonly property bool contentsSearching: contentSearch.pending !== null
   property var lastContents: null
 
-  function cancelContents() { contentSearch.cancel() }
+  function cancelContents() { return contentSearch.cancel() }
 
   // The Search Files view's Contents section, a sibling of searchAsync. The
   // reply carries the view's serial, so the view drops one for an older
@@ -386,8 +386,7 @@ Item {
   }
 
   // A content row is a listed file, so files.open and every file action
-  // take it. The subtitle is the matching line, or the folder when rg could
-  // not print the line as text.
+  // take it.
   function contentHit(m) {
     var where = FileIndex.displayPath(m.path.slice(0, m.path.lastIndexOf("/")), backend.paths.home)
     var c = RootSearch.fileCandidate({ id: "file:" + m.path, path: m.path, title: m.path.slice(m.path.lastIndexOf("/") + 1), subtitle: m.text || where })
@@ -777,9 +776,6 @@ Item {
         return backend.searchFiles(String(data && data.query || ""), limit)
       },
       open: function(data) { return backend.openFile(data && data.path) },
-      // The first call starts a search and answers { pending: true }, or
-      // { revealed: false } when the reveal rule says no; the next call for
-      // the same query answers the reply once it has landed.
       searchContents: function(data) {
         var query = String(data && data.query || "").trim()
         var last = backend.lastContents

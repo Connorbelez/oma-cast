@@ -164,7 +164,9 @@ test("the kill timer stops rg and delivers the rows read before it", () => {
 
 test("a hide or keystroke with nothing running cancels nothing", () => {
   const h = harness()
-  h.service.cancel()
+  assert.equal(h.service.cancel(), false)
   h.service.kill()
   assert.deepEqual([h.log, h.signals], [[], []])
+  h.service.search({ serial: 2, query: "frec", roots: ROOTS }, () => {})
+  assert.equal(h.service.cancel(), true)
 })

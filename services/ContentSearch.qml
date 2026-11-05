@@ -51,11 +51,12 @@ Item {
   // SIGTERM to timeout ends rg and the rest of its process group.
   function cancel() {
     var request = service.pending
-    if (!request) return
+    if (!request) return false
     service.pending = null
     killTimer.stop()
     if (run.request === request && run.running) run.signal(15)
     service.message("info", "content: cancelled")
+    return true
   }
 
   // The 300 ms budget [I]: the rows read before the kill still show.

@@ -93,17 +93,15 @@ PanelWindow {
   property bool previewLogged: false
   property bool quickLook: false
 
-  // The files view's Contents section (SPEC §8.6). Once the query has been
-  // still for 150 ms [I], Backend.searchContents runs the reveal rule and rg.
-  // The request carries searchSerial, a reply for an older serial is
-  // dropped, and every rebuild and hide kills the running search. The
-  // Names / Contents dropdown on Ctrl+P forces it and hides the name rows.
+  // The files view's Contents section (SPEC §8.6) searches once the query
+  // has been still for 150 ms [I].
   readonly property var fileFilters: [{ id: "names", title: "Names" }, { id: "contents", title: "Contents" }]
   readonly property bool contentsForced: window.filesView && window.view.filter === "contents"
   readonly property bool contentsComing: window.filesView && window.query.trim().length >= window.backend.contentMinChars
     && (contentDelay.running || window.backend.contentsSearching)
   property double rebuiltAt: 0
   property double contentsShownAt: 0
+  property bool contentsShown: false
 
   // Inline argument pills for the selected command: argFocus -1 is the
   // search field, 0.. an argument.
@@ -260,9 +258,13 @@ PanelWindow {
     onTriggered: window.searchContents()
   }
 
+  // A Contents section on screen, or a search still due when the launcher
+  // hides, counts as cancelled too; ContentSearch logs the run it stops.
   function cancelContents() {
+    var dropped = window.contentsShown || (contentDelay.running && !window.shown)
     contentDelay.stop()
-    window.backend.cancelContents()
+    window.contentsShown = false
+    if (!window.backend.cancelContents() && dropped) window.backend.log("info", "", "content: cancelled")
   }
 
   function searchContents() {
@@ -289,6 +291,7 @@ PanelWindow {
       return window.rowData(c, "item")
     })))
     if (window.selectedIndex < 0 || window.selectedIndex >= cut) window.select(window.nextSelectable(cut, 1))
+    window.contentsShown = true
     window.contentsShownAt = Date.now()
   }
 

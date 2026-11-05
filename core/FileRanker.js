@@ -399,9 +399,7 @@ function recent(rows, s, limit) {
   return s.recent.result
 }
 
-// Content search (SPEC §8.6). Contents show for a query of at least 3
-// characters that has fewer than 5 name hits or a space, or for any such
-// query when the Contents dropdown forces them.
+// Content search (SPEC §8.6).
 var CONTENT_MIN_CHARS = 3
 var CONTENT_NAME_HITS = 5
 var CONTENT_ROWS = 20
@@ -420,10 +418,8 @@ function revealContent(query, hits, forced) {
   return q.length >= CONTENT_MIN_CHARS && (!!forced || /\s/.test(q) || hits < CONTENT_NAME_HITS)
 }
 
-// The matching line trimmed, and at most 200 characters. A match more than
-// 16 characters in starts the text at the word that holds it, or at the
-// match in a word that long, because the list pane shows about 30
-// characters of a subtitle.
+// The list pane shows about 30 characters of a subtitle, so a match far
+// into the line starts the text at its word.
 function snippet(line, match) {
   var text = line.replace(/[\u0000-\u001f\u007f]+/g, " ").trim()
   var at = match ? text.indexOf(match) : -1
@@ -449,8 +445,7 @@ function contentMatches(output) {
   return out
 }
 
-// Listed files only, so every row opens through files.open. The best folder
-// prior first, then the shorter path, at most 20.
+// Listed files only, so every row opens through files.open.
 function contentRows(matches, s, rows) {
   var listed = joinedNames(rows).byPath
   return matches.filter(function(m) { return listed[m.path] !== undefined }).map(function(m) {
