@@ -1,9 +1,8 @@
 // Ranks listed files for Search Files (SPEC §8.6). A listed row is
-// { path, name, dir }; a ranked row adds { band, score }. Bands, lower is
-// better: 0 exact name or stem, 1 prefix, 2 word start, 3 substring,
-// 4 subsequence, 5 typo (the helper's, absent here), 6 path only. Every match
-// goes through a RegExp built once per query: Qt's JS engine runs a character
-// loop 25 times slower than node (docs/phase7-prototypes/README.md).
+// { path, name, dir }; a ranked row adds { band, score }. Bands: 0 exact name
+// or stem, 1 prefix, 2 word start, 3 substring, 4 subsequence, 5 typo (the
+// helper's, absent here), 6 path only. Matching never loops over characters:
+// Qt's JS engine runs such a loop 25 times slower than node.
 
 var LIFT_OPENS = 100
 var RECENCY_HALF_LIFE_DAYS = 30
@@ -63,7 +62,6 @@ function relativeDir(dir, home) {
   return dir.indexOf(home + "/") === 0 ? dir.slice(home.length + 1) : dir
 }
 
-// band(query, row, home): the query as a string or as compile(query).
 function band(query, row, home) {
   var words = typeof query === "string" ? compile(query) : query
   if (words.length === 0) return -1
@@ -99,8 +97,6 @@ function signals(probeText, opens, home, nowMs) {
   return { home: home, nowMs: nowMs, opens: opened, dirWeight: dirWeight, priorCache: Object.create(null) }
 }
 
-// The nearest weighted ancestor's weight over 1 + 0.5 × distance, cached
-// per directory for the life of one signals object.
 function prior(dir, s) {
   if (dir in s.priorCache) return s.priorCache[dir]
   var value = 0
@@ -146,12 +142,9 @@ function joinedNames(rows) {
   return joined
 }
 
-// Calls visit(index) once for each row whose name the global regex matches,
-// in list order. Every scan regex ends in [^\n]*, so a match ends at its
-// name's end and the next one starts on a later line. test() allocates no
-// match array: a one-letter query would otherwise make thousands per
-// keystroke and pull a 20 to 100 ms collection of the whole shell's heap
-// into it.
+// Every scan regex ends in [^\n]*, so a name matches once. test() allocates
+// no match array; exec() made thousands per one-letter keystroke and pulled
+// 20 to 100 ms collections of the whole shell's heap into the search.
 function scanRows(listed, regex, visit) {
   regex.lastIndex = 0
   var r = 0
@@ -162,9 +155,8 @@ function scanRows(listed, regex, visit) {
   }
 }
 
-// Counting with test() allocates nothing. Two replaces were faster, but
-// each built a string the size of the list, and 420 live calls saw twice as
-// many collection pauses.
+// Two replaces counted faster, but each built a string the size of the list
+// and 420 live calls saw twice as many collection pauses.
 function countRows(listed, regex) {
   var n = 0
   regex.lastIndex = 0
@@ -176,9 +168,8 @@ function hit(row, matchBand, value) {
   return { row: row, band: matchBand, score: value }
 }
 
-// Appends the best of one band's hits to out, up to max rows. A band with
-// more hits than room is cut at the room-th best score first, so only the
-// rows that can show are sorted.
+// Cuts a band at the room-th best score first, so only rows that can show
+// are sorted.
 function take(out, hits, max) {
   var room = max - out.length
   if (room <= 0) return
@@ -201,9 +192,8 @@ function liftedBand(matchBand, opens) {
   return matchBand >= 3 && opens >= LIFT_OPENS ? matchBand - 1 : matchBand
 }
 
-// One word: a scan per band, best band first, so a one-letter query with
-// thousands of hits scores only the bands it shows. Lifted rows are placed
-// before the scans and skipped by them.
+// A scan per band, best first, so a one-letter query with thousands of hits
+// scores only the bands it shows.
 function rankWord(rows, listed, m, s, max) {
   var seen = new Uint8Array(rows.length)
   var buckets = [[], [], [], [], []]
@@ -238,8 +228,6 @@ function rankWord(rows, listed, m, s, max) {
   return { hits: countRows(listed, m.lines), rows: out }
 }
 
-// Several words: the last word's subsequence scan finds the candidates and
-// band() places each one.
 function rankWords(rows, listed, words, s, max) {
   var buckets = [[], [], [], [], [], [], []]
   var count = 0
@@ -271,8 +259,8 @@ function rank(rows, query, s, limit) {
   return words.length === 1 ? rankWord(rows, listed, words[0], s, max) : rankWords(rows, listed, words, s, max)
 }
 
-// The k-th largest value, through a min-heap of k values, or 0 when there
-// are fewer than k. Qt's typed arrays have no sort.
+// The k-th largest value, or 0 when there are fewer than k. A heap, because
+// Qt's typed arrays have no sort.
 function cutFor(values, k) {
   var heap = []
   for (var i = 0; i < values.length; i++) {
@@ -292,10 +280,8 @@ function cutFor(values, k) {
   return heap.length === k ? heap[0] : 0
 }
 
-// The empty query: every row with any usage, by usage alone. Scores go in a
-// typed array, a heap finds the cut for the best `limit`, and only rows at or
-// above it are sorted as objects. The result depends on nothing else, so it
-// is kept on the signals object.
+// The empty query ranks by usage alone. Its rows depend only on the list and
+// the signals, so they are kept on the signals object.
 function recent(rows, s, limit) {
   var max = limit > 0 ? limit : Infinity
   var cached = s.recent
