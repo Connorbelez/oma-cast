@@ -370,11 +370,12 @@ test("ContentSearch starts one fixed argv from the home dir and writes the query
   for (const call of source.match(/service\.message\([^\n]*/g)) assert.doesNotMatch(call, /query/, call)
 })
 
+// The two roots run at once, so each fake writes a whole line in one append.
 function fakeContentRg(home, body) {
   fs.writeFileSync(home + "/rg", [
     "#!/bin/bash",
-    'tr "\\0" " " </proc/$$/cmdline >>"$LOG"; echo >>"$LOG"',
-    'tr "\\0" " " </proc/$PPID/cmdline >>"$LOG.parents"; echo >>"$LOG.parents"',
+    'printf "%s\\n" "$(tr "\\0" " " </proc/$$/cmdline)" >>"$LOG"',
+    'printf "%s\\n" "$(tr "\\0" " " </proc/$PPID/cmdline)" >>"$LOG.parents"',
     'cat >>"$LOG.stdin"',
     body
   ].join("\n") + "\n", { mode: 0o755 })
