@@ -15,12 +15,12 @@ function escapeRegExp(text) {
 }
 
 // "spec" becomes s[^p]*p[^e]*e[^c]*c, which finds the earliest match without
-// backtracking.
-function subsequenceSource(word) {
+// backtracking. The scan form also stops at a newline, the end of a name.
+function subsequenceSource(word, stop) {
   var chars = word.split("")
   return chars.map(function(c, i) {
     var next = chars[i + 1]
-    return escapeRegExp(c) + (next === undefined ? "" : "[^" + escapeRegExp(next) + "]*")
+    return escapeRegExp(c) + (next === undefined ? "" : "[^" + escapeRegExp(next) + stop + "]*")
   }).join("")
 }
 
@@ -32,7 +32,12 @@ function compile(query) {
       prefix: new RegExp("^" + e, "i"),
       wordStart: new RegExp("(?:^|[-_. ])" + e, "i"),
       substring: new RegExp(e, "i"),
-      subsequence: new RegExp(subsequenceSource(word), "i"),
+      subsequence: new RegExp(subsequenceSource(word, ""), "i"),
+      prefixLines: new RegExp("^" + e + "[^\\n]*", "gim"),
+      wordStartLines: new RegExp("[-_. ]" + e + "[^\\n]*", "gi"),
+      substringLines: new RegExp(e + "[^\\n]*", "gi"),
+      lines: new RegExp(subsequenceSource(word, "\\n") + "[^\\n]*", "gi"),
+      without: word.length === 1 ? new RegExp("^[^" + e + "\\n]*$", "gim") : null,
       segment: new RegExp("(?:^|/)(?:[^/]*[-_. ])?" + e, "i")
     }
   })
@@ -44,13 +49,15 @@ function exact(m, name) {
   return dot === m.word.length && name.slice(0, dot).toLowerCase() === m.word
 }
 
+// The subsequence test comes first: it is the loosest band, so a name that
+// fails it costs one RegExp.
 function nameBand(m, name) {
+  if (!m.subsequence.test(name)) return -1
   if (exact(m, name)) return 0
   if (m.prefix.test(name)) return 1
   if (m.wordStart.test(name)) return 2
   if (m.substring.test(name)) return 3
-  if (m.subsequence.test(name)) return 4
-  return -1
+  return 4
 }
 
 function relativeDir(dir, home) {
@@ -62,9 +69,10 @@ function band(query, row, home) {
   var words = typeof query === "string" ? compile(query) : query
   if (words.length === 0) return -1
   if (words.length === 1) return nameBand(words[0], row.name)
-  if (words.every(function(m) { return m.wordStart.test(row.name) })) return 2
   var last = nameBand(words[words.length - 1], row.name)
-  if (last < 0 || last > 2) return -1
+  if (last < 0) return -1
+  if (words.every(function(m) { return m.wordStart.test(row.name) })) return 2
+  if (last > 2) return -1
   var rel = relativeDir(row.dir, home || "")
   for (var i = 0; i < words.length - 1; i++) if (!words[i].segment.test(rel)) return -1
   return 6
@@ -120,58 +128,195 @@ function score(row, s) {
   return Math.log(1 + u.opens / LIFT_OPENS) + 0.5 * u.recency + 0.5 * u.prior
 }
 
-function byScore(a, b) {
-  return b.score - a.score || a.name.length - b.name.length || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)
+var joined = { rows: null, text: "", starts: [], byPath: null }
+
+// Every name on its own line, built once per list. A native scan of this
+// text finds matching names several times faster in Qt's engine than one
+// RegExp call per name.
+function joinedNames(rows) {
+  if (joined.rows === rows) return joined
+  var starts = []
+  var byPath = Object.create(null)
+  var at = 0
+  for (var r = 0; r < rows.length; r++) {
+    starts.push(at)
+    byPath[rows[r].path] = r
+    at += rows[r].name.length + 1
+  }
+  joined = { rows: rows, text: rows.map(function(row) { return row.name }).join("\n"), starts: starts, byPath: byPath }
+  return joined
 }
 
-function ranked(row, matchBand, s) {
-  return { path: row.path, name: row.name, dir: row.dir, band: matchBand, score: score(row, s) }
+// Calls visit(index) once for each row whose name the global regex matches,
+// in list order. Every scan regex ends in [^\n]*, so it consumes the rest of
+// the name and the next match starts on a later line.
+function scanRows(listed, regex, visit) {
+  regex.lastIndex = 0
+  var r = 0
+  var last = listed.starts.length - 1
+  for (var m = regex.exec(listed.text); m !== null; m = regex.exec(listed.text)) {
+    while (r < last && listed.starts[r + 1] <= m.index) r++
+    visit(r)
+  }
+}
+
+function hit(row, matchBand, effective, value) {
+  return { row: row, band: matchBand, effective: effective, score: value }
+}
+
+// Sorts one band's hits and appends the best to out, up to max rows.
+function take(out, hits, max) {
+  hits.sort(function(a, b) {
+    return a.effective - b.effective || b.score - a.score || a.row.name.length - b.row.name.length
+      || (a.row.path < b.row.path ? -1 : a.row.path > b.row.path ? 1 : 0)
+  })
+  for (var i = 0; i < hits.length && out.length < max; i++) {
+    var row = hits[i].row
+    out.push({ path: row.path, name: row.name, dir: row.dir, band: hits[i].band, score: hits[i].score })
+  }
 }
 
 // A file opened from omacast within its half-life moves up one band, but
 // never into exact or prefix: band 2 stays, 3 to 6 move up one.
+function liftedBand(matchBand, opens) {
+  return matchBand >= 3 && opens >= LIFT_OPENS ? matchBand - 1 : matchBand
+}
+
+// One word: a scan per band, best band first, so a one-letter query with
+// thousands of hits scores only the bands it shows. Lifted rows are placed
+// before the scans and skipped by them.
+function rankWord(rows, listed, m, s, max) {
+  var seen = new Uint8Array(rows.length)
+  var lifted = [[], [], [], [], []]
+  Object.keys(s.opens).forEach(function(path) {
+    var r = listed.byPath[path]
+    if (r === undefined) return
+    var matchBand = nameBand(m, rows[r].name)
+    var effective = liftedBand(matchBand, s.opens[path])
+    if (effective === matchBand) return
+    seen[r] = 1
+    lifted[effective].push(hit(rows[r], matchBand, effective, score(rows[r], s)))
+  })
+  // Scan i > 0 yields band i + 1, the band its lifted rows join.
+  var scans = [
+    { regex: m.prefixLines, band: function(row) { return exact(m, row.name) ? 0 : 1 } },
+    { regex: m.wordStartLines, band: function() { return 2 } },
+    { regex: m.substringLines, band: function() { return 3 } },
+    { regex: m.lines, band: function() { return 4 } }
+  ]
+  var out = []
+  scans.forEach(function(scan, i) {
+    if (out.length >= max) return
+    var hits = i > 0 ? lifted[i + 1] : []
+    scanRows(listed, scan.regex, function(r) {
+      if (seen[r]) return
+      seen[r] = 1
+      var matchBand = scan.band(rows[r])
+      hits.push(hit(rows[r], matchBand, matchBand, score(rows[r], s)))
+    })
+    take(out, hits, max)
+  })
+  return { hits: count(listed, m), rows: out }
+}
+
+// String.match copies every match, so for one letter, which most names
+// hold, counting the names without it is about half the cost.
+function count(listed, m) {
+  if (m.without) return listed.starts.length - (listed.text.match(m.without) || []).length
+  return (listed.text.match(m.lines) || []).length
+}
+
+// Several words: the last word's subsequence scan finds the candidates and
+// band() places each one.
+function rankWords(rows, listed, words, s, max) {
+  var buckets = [[], [], [], [], [], [], []]
+  var count = 0
+  scanRows(listed, words[words.length - 1].lines, function(r) {
+    var matchBand = band(words, rows[r], s.home)
+    if (matchBand < 0) return
+    count++
+    var effective = liftedBand(matchBand, s.opens[rows[r].path] || 0)
+    buckets[effective].push(hit(rows[r], matchBand, effective, score(rows[r], s)))
+  })
+  var out = []
+  buckets.forEach(function(hits) { if (out.length < max) take(out, hits, max) })
+  return { hits: count, rows: out }
+}
+
+// Builds the joined names and every listed folder's prior, so the first
+// keystroke after a new list or new signals pays for neither (20 to 40 ms on
+// the dev machine's 19,900 files).
+function prepare(rows, s) {
+  joinedNames(rows)
+  var dir = null
+  for (var r = 0; r < rows.length; r++) {
+    if (rows[r].dir === dir) continue
+    dir = rows[r].dir
+    prior(dir, s)
+  }
+}
+
 function rank(rows, query, s, limit) {
   var words = compile(query)
   var max = limit > 0 ? limit : Infinity
   if (words.length === 0) return recent(rows, s, limit)
-  var buckets = []
-  for (var b = 0; b < BANDS; b++) buckets.push([])
-  var hits = 0
-  rows.forEach(function(row) {
-    var matchBand = band(words, row, s.home)
-    if (matchBand < 0) return
-    hits++
-    var lifted = matchBand >= 3 && (s.opens[row.path] || 0) >= LIFT_OPENS
-    buckets[lifted ? matchBand - 1 : matchBand].push({ row: row, band: matchBand })
-  })
-  var out = []
-  for (var i = 0; i < BANDS && out.length < max; i++) {
-    var scored = buckets[i].map(function(hit) { return ranked(hit.row, hit.band, s) }).sort(byScore)
-    out = out.concat(scored.slice(0, max - out.length))
-  }
-  return { hits: hits, rows: out }
+  var listed = joinedNames(rows)
+  return words.length === 1 ? rankWord(rows, listed, words[0], s, max) : rankWords(rows, listed, words, s, max)
 }
 
-// The empty query: every row with any usage, by usage alone. Keeps only the
-// best `limit` rows instead of sorting the whole list.
+// The k-th largest positive value, through a min-heap of k values, or 0 when
+// fewer than k are positive. Qt's typed arrays have no sort.
+function cutFor(values, k) {
+  var heap = []
+  for (var i = 0; i < values.length; i++) {
+    var v = values[i]
+    if (!(v > 0) || (heap.length === k && v <= heap[0])) continue
+    var at = heap.length < k ? heap.push(v) - 1 : 0
+    heap[at] = v
+    for (;;) {
+      var parent = (at - 1) >> 1
+      var child = 2 * at + 1
+      if (child + 1 < heap.length && heap[child + 1] < heap[child]) child++
+      if (at > 0 && heap[at] < heap[parent]) { var up = heap[at]; heap[at] = heap[parent]; heap[parent] = up; at = parent }
+      else if (child < heap.length && heap[child] < heap[at]) { var down = heap[at]; heap[at] = heap[child]; heap[child] = down; at = child }
+      else break
+    }
+  }
+  return heap.length === k ? heap[0] : 0
+}
+
+// The empty query: every row with any usage, by usage alone. Scores go in a
+// typed array, a heap finds the cut for the best `limit`, and only rows at or
+// above it are sorted as objects.
 function recent(rows, s, limit) {
   var max = limit > 0 ? limit : Infinity
-  var best = []
+  var values = new Float64Array(rows.length)
   var hits = 0
-  rows.forEach(function(row) {
-    var value = score(row, s)
-    if (!(value > 0)) return
-    hits++
-    if (best.length >= max && value <= best[best.length - 1].score) return
-    best.push({ path: row.path, name: row.name, dir: row.dir, band: -1, score: value })
-    best.sort(byScore)
-    if (best.length > max) best.pop()
-  })
-  return { hits: hits, rows: best }
+  var dir = null
+  var dirPrior = 0
+  for (var r = 0; r < rows.length; r++) {
+    var row = rows[r]
+    if (row.dir !== dir) {
+      dir = row.dir
+      dirPrior = prior(dir, s)
+    }
+    var opens = s.opens[row.path]
+    values[r] = (opens ? Math.log(1 + opens / LIFT_OPENS) : 0) + 0.5 * recency(row, s) + 0.5 * dirPrior
+    if (values[r] > 0) hits++
+  }
+  var cut = hits > max ? cutFor(values, max) : 0
+  var best = []
+  for (var i = 0; i < rows.length; i++) {
+    if (!(values[i] > 0) || values[i] < cut) continue
+    best.push(hit(rows[i], -1, 0, values[i]))
+  }
+  var out = []
+  take(out, best, max)
+  return { hits: hits, rows: out }
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
-    LIFT_OPENS: LIFT_OPENS, compile: compile, band: band, signals: signals, usage: usage, rank: rank, recent: recent
+    LIFT_OPENS: LIFT_OPENS, band: band, signals: signals, usage: usage, prepare: prepare, rank: rank
   }
 }

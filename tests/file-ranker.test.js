@@ -84,10 +84,18 @@ test("the empty query lists files by usage alone", () => {
   assert.equal(recent.hits, 164)
 })
 
-test("a limit keeps the best rows of the full order", () => {
-  const all = ranked("readme").map(short)
-  assert.deepEqual(FileRanker.rank(rows, "readme", signals(), 3).rows.map(short), all.slice(0, 3))
-  assert.equal(FileRanker.rank(rows, "readme", signals(), 3).hits, 13)
+test("a limit keeps the best rows of the full order and the full hit count", () => {
+  const counts = {}
+  for (const query of ["", "readme", "s", "launch", "e", "sales readme"]) {
+    const all = FileRanker.rank(rows, query, signals())
+    counts[query] = all.hits
+    for (const limit of [1, 3, 7, 20, 60]) {
+      const some = FileRanker.rank(rows, query, signals(), limit)
+      assert.deepEqual(some.rows.map(short), all.rows.slice(0, limit).map(short), `${JSON.stringify(query)} limit ${limit}`)
+      assert.equal(some.hits, all.hits)
+    }
+  }
+  assert.deepEqual(counts, { "": 164, readme: 13, s: 87, launch: 8, e: 182, "sales readme": 6 })
 })
 
 test("the prior comes from the nearest weighted folder and decays with distance", () => {
@@ -109,5 +117,6 @@ test("FileRanker matches names without a loop over their characters", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "core", "FileRanker.js"), "utf8")
   assert.equal(/charAt|charCodeAt|codePointAt|name\.split\(|for\s*\([^;]*\bof\s+[\w.]*name|while\s*\([^)]*name/.test(source), false)
   const indexed = source.match(/for\s*\(\s*var\s+\w+\s*=\s*0\s*;\s*\w+\s*<\s*[\w.]+/g) || []
-  assert.deepEqual(indexed.filter((header) => !/<\s*(BANDS|words\.length)$/.test(header)), [])
+  assert.deepEqual(indexed.filter((header) => /<\s*(?:[\w.]*\.)?(name|word|text|query|path|dir|line)\.length$/.test(header)), [])
+  assert.equal(indexed.length > 0, true, "the lint saw the ranker's loops over rows and words")
 })
