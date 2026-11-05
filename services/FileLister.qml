@@ -35,6 +35,7 @@ Item {
   property double recountStartedAt: 0
 
   property var signals: []
+  property string signalsText: ""
   property double signalsAt: 0
 
   property string ignoreText: ""
@@ -221,7 +222,10 @@ Item {
   }
 
   function signalsRead(exitCode, exitStatus, text) {
-    if (exitStatus === 0 && exitCode === 0) lister.signals = FileIndex.parseSignals(text)
+    if (exitStatus === 0 && exitCode === 0) {
+      lister.signals = FileIndex.parseSignals(text)
+      lister.signalsText = text
+    }
     else lister.message("warning", "files: signals " + (exitStatus === 0 && exitCode === 124 ? "timed out" : "exited abnormally") + "; keeping the previous signals", null)
     lister.signalsAt = Date.now()
     var touched = lister.subtrees.some(function(t) {

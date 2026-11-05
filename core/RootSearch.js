@@ -39,6 +39,15 @@ var BUILTINS = [
     keywords: ["calculator", "calc", "math", "history", "conversions"],
     run: { push: { kind: "calculator-history", title: "Calculator History" } },
     rootSearch: { when: "always" }
+  },
+  {
+    id: "builtin:search-files",
+    title: "Search Files",
+    subtitle: "File Search",
+    glyph: "\uf002",                     // nf-fa-search
+    keywords: ["files", "find", "open", "documents"],
+    run: { push: { kind: "files", title: "Search Files" } },
+    rootSearch: { when: "always" }
   }
 ]
 

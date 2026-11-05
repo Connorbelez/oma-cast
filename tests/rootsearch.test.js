@@ -198,3 +198,8 @@ test("actions: apps offer Open New Window on Shift+Enter", () => {
   const openNew = RS.actionsFor(app).find((a) => a.id === "open-new")
   assert.equal(openNew.shortcut, "Shift ↵")
 })
+
+test("search files finds the Search Files command, which pushes the files view", () => {
+  const top = results("search files")[0].rows[0].candidate
+  assert.deepEqual([top.id, top.title, top.run], ["builtin:search-files", "Search Files", { push: { kind: "files", title: "Search Files" } }])
+})

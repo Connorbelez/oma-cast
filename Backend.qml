@@ -13,6 +13,7 @@ import "core/OmarchyMenu.js" as OmarchyMenu
 import "core/RootSearch.js" as RootSearch
 import "core/Calculator.js" as Calculator
 import "core/FileIndex.js" as FileIndex
+import "core/FileRanker.js" as FileRanker
 import "services"
 
 Item {
@@ -216,6 +217,67 @@ Item {
     var path = String(value || "")
     if (path.charAt(0) !== "/" || /[\n\r\0]/.test(path)) throw new Error("Expected an absolute path, got " + JSON.stringify(path))
     return path.replace(/\/+$/, "") || "/"
+  }
+
+  readonly property int fileRowsLimit: 50
+  property var fileSignalsMemo: null
+
+  // Rebuilt when the signal probe reruns or the frecency store changes, so
+  // the prior's per-folder cache lasts across keystrokes.
+  function fileSignals() {
+    var key = fileLister.signalsAt + ":" + backend.frecencyRevision
+    if (backend.fileSignalsMemo && backend.fileSignalsMemo.key === key) return backend.fileSignalsMemo.signals
+    var items = frecencyStore.loaded ? frecencyStore.doc.items : {}
+    var nowMs = Date.now()
+    var opens = {}
+    for (var id in items) if (id.charAt(0) === "/") opens[id] = Frecency.score(items[id].anchor, nowMs / 1000)
+    var signals = FileRanker.signals(fileLister.signalsText, opens, backend.paths.home, nowMs)
+    backend.fileSignalsMemo = { key: key, signals: signals }
+    return signals
+  }
+
+  Timer {
+    id: fileWarmTimer
+    interval: 50
+    onTriggered: FileRanker.prepare(fileLister.rows, backend.fileSignals())
+  }
+
+  Connections {
+    target: fileLister
+    function onRowsChanged() { fileWarmTimer.restart() }
+    function onSignalsAtChanged() { fileWarmTimer.restart() }
+  }
+
+  function searchFiles(query, limit) {
+    var t0 = Date.now()
+    var result = FileRanker.rank(fileLister.rows, query, backend.fileSignals(), limit)
+    var ms = Date.now() - t0
+    backend.log("info", "", "files: ranked " + result.hits + " of " + fileLister.rows.length + " in " + ms + " ms")
+    return {
+      hits: result.hits,
+      count: fileLister.rows.length,
+      ms: ms,
+      rows: result.rows.map(function(r) {
+        return { id: "file:" + r.path, path: r.path, title: r.name, subtitle: FileIndex.displayPath(r.dir, backend.paths.home), band: r.band, score: r.score }
+      })
+    }
+  }
+
+  function fileSections(query) {
+    var rows = backend.searchFiles(query, backend.fileRowsLimit).rows.map(function(r) {
+      return { candidate: { id: r.id, type: "file", kind: "file", title: r.title, subtitle: r.subtitle, glyph: "\uf15b", rootSearch: { when: "always" } } }
+    })
+    if (!rows.length) return []
+    return [{ id: query.trim() ? "files" : "recent-files", title: query.trim() ? "Files" : "Recent & frequent files", rows: rows }]
+  }
+
+  // The path is the file's own, never the typed query, and starts with "/",
+  // so xdg-open cannot read it as a flag.
+  function openFile(value) {
+    var path = backend.checkFilePath(value)
+    backend.recordVisit(path, "")
+    Util.execArgv(["uwsm-app", "--", "xdg-open", path])
+    return { close: true, hud: path.slice(path.lastIndexOf("/") + 1) }
   }
 
   FileLister {
@@ -456,6 +518,7 @@ Item {
         var sections
         if (view && view.kind === "menu") sections = RootSearch.submenuSections(backend.candidates, view.menuId, query, ctx, backend.deps)
         else if (view && view.kind === "calculator-history") sections = RootSearch.historySections(calculatorStore.doc.history, query, ctx.nowMs, Calculator.filterHistory)
+        else if (view && view.kind === "files") sections = backend.fileSections(query)
         else {
           ctx.filter = String(data && data.filter || "all")
           if (query.trim() && ctx.filter === "all") ctx.calculation = backend.calculate(query)
@@ -469,6 +532,7 @@ Item {
         var rowId = String(data && data.id || "")
         if (rowId === RootSearch.CALCULATOR_ID) return RootSearch.actionsFor({ kind: "calculator" })
         if (rowId.indexOf("calculator-history:") === 0) return RootSearch.actionsFor({ kind: "calculator-history" })
+        if (rowId.indexOf("file:") === 0) return [{ id: "open", title: "Open", shortcut: "↵", section: "primary", icon: "" }]
         var candidate = backend.decorated(rowId)
         if (!candidate) {
           var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === data.id })[0]
@@ -488,6 +552,7 @@ Item {
           var entry = backend.historyEntry(rowId)
           return entry ? RootSearch.aboutFor(RootSearch.historyCandidate(entry, nowMs), nowMs) : []
         }
+        if (rowId.indexOf("file:") === 0) return [{ label: "Path", value: FileIndex.displayPath(rowId.slice("file:".length), backend.paths.home) }]
         var candidate = backend.decorated(rowId)
         if (!candidate) {
           var f = RootSearch.FALLBACKS.filter(function(x) { return x.id === rowId })[0]
@@ -518,6 +583,7 @@ Item {
           if (!entry) throw new Error("No such history entry")
           return backend.calculatorAction(String(data.action || "open"), entry, entry.id)
         }
+        if (data && String(data.id).indexOf("file:") === 0 && String(data.action || "open") === "open") return backend.openFile(String(data.id).slice("file:".length))
         return backend.performAction(data)
       },
       getSearchHistory: function() { return frecencyStore.loaded ? frecencyStore.doc.searchHistory : [] }
@@ -565,6 +631,11 @@ Item {
           paths: rows.slice(offset, offset + limit).map(function(r) { return r.path })
         }
       },
+      search: function(data) {
+        var limit = Math.min(backend.fileRowsLimit, Math.max(1, Number(data && data.limit) || backend.fileRowsLimit))
+        return backend.searchFiles(String(data && data.query || ""), limit)
+      },
+      open: function(data) { return backend.openFile(data && data.path) },
       refresh: function(data) {
         var roots = data && data.roots !== undefined ? data.roots : fileLister.defaultRoots
         if (!Array.isArray(roots) || roots.length < 1 || roots.length > 2) throw new Error("roots must be one or two absolute paths")
@@ -642,6 +713,7 @@ Item {
       fileLister.opened()
     } else if (method === "window.visibilityChanged") {
       fileLister.hidden()
+      fileWarmTimer.restart()
     }
   }
 
@@ -711,7 +783,8 @@ Item {
   readonly property int dataRevision: candidatesRevision + (settingsStore.loaded ? 1 : 0) + (frecencyStore.loaded ? 1 : 0)
   property int storeRevision: 0
   Connections { target: settingsStore; function onChanged() { backend.storeRevision++ } }
-  Connections { target: frecencyStore; function onChanged() { backend.storeRevision++ } }
+  property int frecencyRevision: 0
+  Connections { target: frecencyStore; function onChanged() { backend.storeRevision++; backend.frecencyRevision++ } }
   Connections { target: calculatorStore; function onChanged() { backend.storeRevision++ } }
 
   FileView {
