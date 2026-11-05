@@ -43,6 +43,7 @@ Item {
     run.request = request
     run.homeRoot = request.roots[0]
     run.configRoot = request.roots[1]
+    run.started = false
     run.exited = false
     run.streamed = false
     run.code = -1
@@ -90,6 +91,22 @@ Item {
     service.start()
   }
 
+  // Quickshell reports a process that never started with no exited, so the
+  // watchdog finishes that run. A run whose process started reports its own
+  // exit and output, at the latest when timeout sends SIGKILL 2 s after the
+  // kill timer's SIGTERM, and finishing it sooner would let them land on the
+  // next run.
+  function giveUp() {
+    if (run.started) {
+      service.message("warning", "content: rg is still running after 3 s")
+      return
+    }
+    service.message("warning", "content: rg did not start; giving up on it")
+    run.exited = true
+    run.streamed = true
+    service.finished()
+  }
+
   Component.onDestruction: { service.pending = null; if (run.running) run.signal(15) }
 
   Timer {
@@ -98,17 +115,10 @@ Item {
     onTriggered: service.kill()
   }
 
-  // Quickshell reports a process that never started with no exited, and
-  // timeout sends SIGKILL 2 s after it passes on the kill timer's SIGTERM.
   Timer {
     id: watchdog
     interval: 3000
-    onTriggered: {
-      service.message("warning", "content: rg did not exit; giving up on it")
-      run.exited = true
-      run.streamed = true
-      service.finished()
-    }
+    onTriggered: service.giveUp()
   }
 
   Process {
@@ -116,6 +126,7 @@ Item {
     property var request: null
     property string homeRoot: ""
     property string configRoot: ""
+    property bool started: false
     property bool exited: false
     property bool streamed: false
     property int code: -1
@@ -123,6 +134,7 @@ Item {
     command: ["timeout", "-k", "2", "5", "bash", "-c", service.searchScript, "omacast-content", run.homeRoot, run.configRoot, service.ignoreFile, service.untouchedFile]
     stdout: StdioCollector { id: output; onStreamFinished: { run.streamed = true; service.finished() } }
     onStarted: {
+      run.started = true
       run.write(run.request.query + "\n")
       run.stdinEnabled = false
     }

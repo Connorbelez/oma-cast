@@ -364,7 +364,7 @@ test("ContentSearch starts one fixed argv from the home dir and writes the query
   for (const arg of commands[0]) assert.ok(/^"[^"$`\\]*"$/.test(arg) || arg in CONTENT_ARGS, `${arg} in [${commands[0]}]`)
   assert.doesNotMatch(source, /execDetached|execArgv|\.command\s*=|command:(?!\s*\[)/)
   assert.match(source, /\n    workingDirectory: service\.home\n/)
-  assert.match(source, /onStarted: \{\s*run\.write\(run\.request\.query \+ "\\n"\)\s*run\.stdinEnabled = false\s*\}/)
+  assert.match(source, /onStarted: \{\s*run\.started = true\s*run\.write\(run\.request\.query \+ "\\n"\)\s*run\.stdinEnabled = false\s*\}/)
   const scripts = source.split("\n").filter((line) => /property string \w*[Ss]cript\b/.test(line))
   assert.deepEqual(scripts.map((line) => /^  readonly property string searchScript: '(?:[^'\\]|\\.)*'$/.test(line)), [true])
   for (const call of source.match(/service\.message\([^\n]*/g)) assert.doesNotMatch(call, /query/, call)

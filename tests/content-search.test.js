@@ -131,11 +131,11 @@ function harness() {
   const source = fs.readFileSync(path.join(__dirname, "../services/ContentSearch.qml"), "utf8")
   const log = [], signals = []
   const service = { pending: null, killAfterMs: 300, message: (level, text) => log.push(text) }
-  const run = { request: null, homeRoot: "", configRoot: "", exited: false, streamed: false, stdinEnabled: false, running: false, code: -1, signal: (n) => signals.push(n) }
+  const run = { request: null, homeRoot: "", configRoot: "", started: false, exited: false, streamed: false, stdinEnabled: false, running: false, code: -1, signal: (n) => signals.push(n) }
   const timer = () => ({ active: false, restart() { this.active = true }, stop() { this.active = false } })
   const output = { text: "" }
   const context = vm.createContext({ service, run, output, killTimer: timer(), watchdog: timer(), FileRanker, Date })
-  for (const name of ["search", "start", "cancel", "kill", "finished"]) {
+  for (const name of ["search", "start", "cancel", "kill", "finished", "giveUp"]) {
     const start = source.indexOf("  function " + name + "(")
     assert.ok(start >= 0, name)
     const end = source.indexOf("\n  }", start) + 4
@@ -149,7 +149,19 @@ function harness() {
     run.streamed = true
     service.finished()
   }
-  return { service, run, context, log, signals, exit }
+  // The run's onExited and its output's onStreamFinished, one at a time.
+  const exited = (code) => {
+    run.running = false
+    run.code = code
+    run.exited = true
+    service.finished()
+  }
+  const streamed = (text) => {
+    output.text = text
+    run.streamed = true
+    service.finished()
+  }
+  return { service, run, context, log, signals, exit, exited, streamed }
 }
 
 const ROOTS = [HOME, HOME + "/.config"]
@@ -178,6 +190,32 @@ test("the kill timer stops rg and delivers the rows read before it", () => {
   h.exit([match(HOME + "/LICENSE", "Copyright 2026", 1, "Copyright"), match(HOME + "/NOTICE", "Copyright", 1, "Copyright").slice(0, 30)].join("\n"))
   assert.deepEqual(got.map((r) => [r.serial, r.matches.map((m) => m.path), r.killed]), [[9, [HOME + "/LICENSE"], true]])
   assert.deepEqual(h.log.map((l) => l.replace(/\d+ files in \d+ ms/, "N")), ["content: killed at 300 ms", "content: N"])
+})
+
+test("a run that outlives the watchdog keeps its slot until its own exit and output arrive", () => {
+  const h = harness(), got = []
+  h.service.search({ serial: 1, query: "frec", roots: ROOTS }, (r) => got.push(r))
+  h.run.started = true
+  h.service.giveUp()
+  h.service.search({ serial: 2, query: "frece", roots: ROOTS }, (r) => got.push(r))
+  assert.deepEqual([h.run.request.serial, h.signals], [1, [15]])
+  h.exited(143)
+  h.streamed(match(HOME + "/a.txt", "frec", 1, "frec"))
+  assert.deepEqual([h.run.request.serial, h.run.started, h.run.exited, h.run.streamed, h.run.code], [2, false, false, false, -1])
+  h.run.started = true
+  h.exited(0)
+  assert.deepEqual(got, [])
+  h.streamed(match(HOME + "/b.txt", "frece", 2, "frece"))
+  assert.deepEqual(got.map((r) => [r.serial, r.matches.map((m) => m.path)]), [[2, [HOME + "/b.txt"]]])
+  assert.deepEqual(h.log.map((l) => l.replace(/\d+ ms/, "N ms")), ["content: rg is still running after 3 s", "content: cancelled", "content: 1 files in N ms"])
+})
+
+test("the watchdog finishes a run whose process never started", () => {
+  const h = harness(), got = []
+  h.service.search({ serial: 3, query: "frec", roots: ROOTS }, (r) => got.push(r))
+  h.service.giveUp()
+  assert.deepEqual([got.map((r) => [r.serial, r.matches]), h.run.request], [[[3, []]], null])
+  assert.deepEqual(h.log.map((l) => l.replace(/\d+ ms/, "N ms")), ["content: rg did not start; giving up on it", "content: 0 files in N ms"])
 })
 
 test("a hide or keystroke with nothing running cancels nothing", () => {
