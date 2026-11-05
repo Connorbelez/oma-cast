@@ -37,7 +37,6 @@ function compile(query) {
       wordStartLines: new RegExp("[-_. ]" + e + "[^\\n]*", "gi"),
       substringLines: new RegExp(e + "[^\\n]*", "gi"),
       lines: new RegExp(subsequenceSource(word, "\\n") + "[^\\n]*", "gi"),
-      without: word.length === 1 ? new RegExp("^[^" + e + "\\n]+$", "gim") : null,
       segment: new RegExp("(?:^|/)(?:[^/]*[-_. ])?" + e, "i")
     }
   })
@@ -163,6 +162,9 @@ function scanRows(listed, regex, visit) {
   }
 }
 
+// Counting with test() allocates nothing. Two replaces were faster, but
+// each built a string the size of the list, and 420 live calls saw twice as
+// many collection pauses.
 function countRows(listed, regex) {
   var n = 0
   regex.lastIndex = 0
@@ -170,15 +172,22 @@ function countRows(listed, regex) {
   return n
 }
 
-function hit(row, matchBand, effective, value) {
-  return { row: row, band: matchBand, effective: effective, score: value }
+function hit(row, matchBand, value) {
+  return { row: row, band: matchBand, score: value }
 }
 
-// Sorts one band's hits and appends the best to out, up to max rows.
+// Appends the best of one band's hits to out, up to max rows. A band with
+// more hits than room is cut at the room-th best score first, so only the
+// rows that can show are sorted.
 function take(out, hits, max) {
+  var room = max - out.length
+  if (room <= 0) return
+  if (hits.length > room) {
+    var cut = cutFor(hits.map(function(h) { return h.score }), room)
+    hits = hits.filter(function(h) { return h.score >= cut })
+  }
   hits.sort(function(a, b) {
-    return a.effective - b.effective || b.score - a.score || a.row.name.length - b.row.name.length
-      || (a.row.path < b.row.path ? -1 : a.row.path > b.row.path ? 1 : 0)
+    return b.score - a.score || a.row.name.length - b.row.name.length || (a.row.path < b.row.path ? -1 : a.row.path > b.row.path ? 1 : 0)
   })
   for (var i = 0; i < hits.length && out.length < max; i++) {
     var row = hits[i].row
@@ -197,7 +206,7 @@ function liftedBand(matchBand, opens) {
 // before the scans and skipped by them.
 function rankWord(rows, listed, m, s, max) {
   var seen = new Uint8Array(rows.length)
-  var lifted = [[], [], [], [], []]
+  var buckets = [[], [], [], [], []]
   Object.keys(s.opens).forEach(function(path) {
     var r = listed.byPath[path]
     if (r === undefined) return
@@ -205,9 +214,10 @@ function rankWord(rows, listed, m, s, max) {
     var effective = liftedBand(matchBand, s.opens[path])
     if (effective === matchBand) return
     seen[r] = 1
-    lifted[effective].push(hit(rows[r], matchBand, effective, score(rows[r], s)))
+    buckets[effective].push(hit(rows[r], matchBand, score(rows[r], s)))
   })
-  // Scan i > 0 yields band i + 1, the band its lifted rows join.
+  // The prefix scan fills bands 0 and 1; scan i > 0 fills band i + 1, which
+  // is then complete because its lifted rows are already in.
   var scans = [
     { regex: m.prefixLines, band: function(row) { return exact(m, row.name) ? 0 : 1 } },
     { regex: m.wordStartLines, band: function() { return 2 } },
@@ -217,22 +227,15 @@ function rankWord(rows, listed, m, s, max) {
   var out = []
   scans.forEach(function(scan, i) {
     if (out.length >= max) return
-    var hits = i > 0 ? lifted[i + 1] : []
     scanRows(listed, scan.regex, function(r) {
       if (seen[r]) return
       seen[r] = 1
       var matchBand = scan.band(rows[r])
-      hits.push(hit(rows[r], matchBand, matchBand, score(rows[r], s)))
+      buckets[matchBand].push(hit(rows[r], matchBand, score(rows[r], s)))
     })
-    take(out, hits, max)
+    for (var b = i === 0 ? 0 : i + 1; b <= i + 1; b++) take(out, buckets[b], max)
   })
-  return { hits: count(listed, m), rows: out }
-}
-
-// Most names hold any one letter, so for one letter the names without it
-// are fewer to count.
-function count(listed, m) {
-  return m.without ? listed.starts.length - countRows(listed, m.without) : countRows(listed, m.lines)
+  return { hits: countRows(listed, m.lines), rows: out }
 }
 
 // Several words: the last word's subsequence scan finds the candidates and
@@ -245,7 +248,7 @@ function rankWords(rows, listed, words, s, max) {
     if (matchBand < 0) return
     count++
     var effective = liftedBand(matchBand, s.opens[rows[r].path] || 0)
-    buckets[effective].push(hit(rows[r], matchBand, effective, score(rows[r], s)))
+    buckets[effective].push(hit(rows[r], matchBand, score(rows[r], s)))
   })
   var out = []
   buckets.forEach(function(hits) { if (out.length < max) take(out, hits, max) })
@@ -268,13 +271,13 @@ function rank(rows, query, s, limit) {
   return words.length === 1 ? rankWord(rows, listed, words[0], s, max) : rankWords(rows, listed, words, s, max)
 }
 
-// The k-th largest positive value, through a min-heap of k values, or 0 when
-// fewer than k are positive. Qt's typed arrays have no sort.
+// The k-th largest value, through a min-heap of k values, or 0 when there
+// are fewer than k. Qt's typed arrays have no sort.
 function cutFor(values, k) {
   var heap = []
   for (var i = 0; i < values.length; i++) {
     var v = values[i]
-    if (!(v > 0) || (heap.length === k && v <= heap[0])) continue
+    if (heap.length === k && v <= heap[0]) continue
     var at = heap.length < k ? heap.push(v) - 1 : 0
     heap[at] = v
     for (;;) {
@@ -315,7 +318,7 @@ function recent(rows, s, limit) {
   var best = []
   for (var i = 0; i < rows.length; i++) {
     if (!(values[i] > 0) || values[i] < cut) continue
-    best.push(hit(rows[i], -1, 0, values[i]))
+    best.push(hit(rows[i], -1, values[i]))
   }
   var out = []
   take(out, best, max)
