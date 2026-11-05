@@ -44,11 +44,12 @@ const BE = "Backend.qml"
 const RS = "search/src/protocol.rs"
 const CS = "services/ContentSearch.qml"
 
-// [constant, file, opener, [patterns that must all match]]
+// [constant, file, opener or [openers], [patterns that must all match in
+// their joined text]]
 const GUARDS = [
   ["GuardPerform", LW, "  function perform(", [/if \(window\.searchPending\) return/]],
   ["GuardActions", LW, "  function actionsForSelected(", [/if \(window\.searchPending \|\|[^)]*\) return \[\]/]],
-  ["GuardSerial", LW, "  function rebuild(", [/var serial = \+\+window\.searchSerial/, /serial !== window\.searchSerial/]],
+  ["GuardSerial", LW, "  function rebuild(", [/var serial = kept \? window\.searchSerial : \+\+window\.searchSerial/, /serial !== window\.searchSerial/]],
   ["GuardRevision", LW, "  function rebuild(", [/var revision = window\.backend\.candidatesRevision/, /revision !== window\.backend\.candidatesRevision/]],
   ["CancelOnRebuild", LW, "  function rebuild(", [/window\.backend\.cancelSearch\(\)/]],
   ["CancelOnHide", LW, "  onShownChanged: {", [/window\.searchSerial\+\+/, /window\.backend\.cancelSearch\(\)/, /window\.searchPending = false/]],
@@ -56,9 +57,10 @@ const GUARDS = [
   ["InvalidateCancels", NS, "  function invalidate(", [/service\.cancel\(\)/, /if \(request\) request\.callback\(null\)/]],
   ["SendOnlyWhenLoaded", NS, "  function search(", [/else if \(service\.loaded\) service\.send\(\)/]],
   ["CalcSkipsAlert", LW, "    function onCalculatorRevisionChanged(", [/!window\.alert/]],
-  ["ContentSerialCheck", LW, "  function searchContents(", [/var serial = window\.searchSerial/, /serial: serial/, /if \(reply\.serial !== window\.searchSerial\) \{/]],
+  ["ContentSerialCheck", LW, ["  function searchContents(", "  function applyContents("],
+    [/var serial = window\.searchSerial/, /serial: serial/, /function\(reply\) \{\s*\n\s*window\.applyContents\(reply\)/, /^  function applyContents\(reply\) \{\s*\n\s*if \(reply\.serial !== window\.searchSerial\) return\n/m]],
   ["ContentPendingCheck", CS, "  function finished(", [/if \(request && request === service\.pending\) \{/]],
-  ["CancelContentOnRebuild", LW, "  function rebuild(", [/window\.cancelContents\(\)/]],
+  ["CancelContentOnRebuild", LW, "  function rebuild(", [/\n    if \(!kept\) window\.cancelContents\(\)\n/]],
   ["CancelContentOnHide", LW, "  onShownChanged: {", [/window\.cancelContents\(\)/]],
 ]
 
@@ -73,7 +75,7 @@ const SHAPES = [
   ["Backend.searchAsync answers empty queries and pushed views synchronously", BE, "  function searchAsync(",
     [/nativeSearch\.cancel\(\)/, /if \(!query \|\| \(view && view\.kind !== "root"\)\)/, /nativeSearch\.search\(/]],
   ["rebuild sets searchPending before searching and clears it in the guarded callback", LW, "  function rebuild(",
-    [/window\.searchPending = true[\s\S]*window\.backend\.searchAsync\(/, /window\.applySearch\(result, keepId, restoreIndex\)\s*\n\s*window\.searchPending = false/]],
+    [/window\.searchPending = true[\s\S]*window\.backend\.searchAsync\(/, /window\.applySearch\(result, keep, restoreIndex\)\s*\n\s*window\.searchPending = false/]],
   ["candidate reloads rebuild only when shown with no panel or alert", LW, "    function onCandidatesRevisionChanged(",
     [/if \(window\.shown && !window\.actionPanelOpen && !window\.alert\) window\.rebuild\(false\)/]],
   ["calculator updates rebuild when shown, no panel and a query", LW, "    function onCalculatorRevisionChanged(",
@@ -98,16 +100,25 @@ const SHAPES = [
   ["rootFileHits ranks synchronously and takes no callback", BE, "  function rootFileHits(",
     [/^  function rootFileHits\(query, ctx\) \{/, /return backend\.searchFiles\(/, /RootSearch\.pathHits\(/,
       /^  function rootFileHits\(query, ctx\) \{(?:(?!Qt\.callLater|\bProcess\b|function\s*\()[\s\S])*?\n  \}/]],
-  ["cancelContents stops the stillness timer, then cancels ContentSearch", LW, "  function cancelContents(",
-    [/contentDelay\.stop\(\)[\s\S]*window\.backend\.cancelContents\(\)/]],
+  ["cancelContents stops the stillness timer, clears the Contents record, then cancels ContentSearch whatever it logs", LW, "  function cancelContents(",
+    [/contentDelay\.stop\(\)\n    window\.contents = \{ view: null, query: "", rows: \[\], held: null \}\n    (?:var \w+ = )?window\.backend\.cancelContents\(\)\n/]],
+  ["a rebuild for the Contents record's own view and query keeps the serial, the timer and the section; any other rebuild in the files view claims a new record", LW, "  function rebuild(",
+    [/^  function rebuild\(resetSelection, restoreIndex\) \{\n    var kept = window\.contents\.view === window\.view && window\.contents\.query === window\.query\n/,
+      /if \(window\.filesView && !kept\) \{\n      window\.contents = \{ view: window\.view, query: window\.query, rows: \[\], held: null \}\n/]],
+  ["a content reply that lands while a layer is open is held, and applyHeld puts it through applyContents once every layer is closed", LW, "  function applyContents(",
+    [/^  function applyContents\(reply\) \{\s*\n\s*if \(reply\.serial !== window\.searchSerial\) return\n\s*if \(window\.layerOpen\) \{ window\.contents\.held = reply; return \}\n/]],
+  ["applyHeld waits for every layer to close and clears the held reply before applying it", LW, "  function applyHeld(",
+    [/if \(!reply \|\| window\.layerOpen\) return\n\s*window\.contents\.held = null\n\s*window\.applyContents\(reply\)/]],
   ["Backend.cancelContents is ContentSearch.cancel", BE, "  function cancelContents(", [/^  function cancelContents\(\) \{ return contentSearch\.cancel\(\) \}$/]],
-  ["rebuild restarts the stillness timer only in the files view, after any cancel and before the synchronous search", LW, "  function rebuild(",
-    [/if \(window\.filesView\) contentDelay\.restart\(\)\s*\n\s*window\.backend\.searchAsync\(/, /contentDelay\.restart\(\)(?![\s\S]*window\.cancelContents\(\))/]],
+  ["rebuild restarts the stillness timer only in the files view for a new record, after any cancel and before the synchronous search", LW, "  function rebuild(",
+    [/if \(window\.filesView && !kept\) \{\n(?:      [^\n]*\n)*?      contentDelay\.restart\(\)\n    \}\n    window\.backend\.searchAsync\(/, /contentDelay\.restart\(\)(?![\s\S]*window\.cancelContents\(\))/]],
   ["popToRoot leaves the files view before its rebuild, so no hidden rebuild restarts the stillness timer", LW, "  function popToRoot(",
     [/window\.stack = \[\{ kind: "root"[\s\S]*window\.rebuild\(true\)/]],
   ["the files view answers synchronously in rootSearch.search", BE, "      search: function(data) {",
     [/view\.kind === "files"\) sections = view\.filter === "contents" \? \[\] : backend\.fileSections\(query\)/]],
-  ["applySearch replaces every row, so the Contents section goes with the old name rows", LW, "  function applySearch(", [/Rows\.update\(rows, next\)/]],
+  ["applySearch replaces every row and puts back only a Contents section that belongs to this view and query", LW, "  function applySearch(", [/var shown = window\.withContents\(next\)\n\s*Rows\.update\(rows, shown\.rows\)/]],
+  ["withContents shows the section only for the view and query it was searched for", LW, "  function withContents(",
+    [/if \(!c\.rows\.length \|\| c\.view !== window\.view \|\| c\.query !== window\.query\) return \{ rows: names, cut: names\.length \}/]],
   ["Backend.searchContents hands the request's serial back with the reply", BE, "  function searchContents(",
     [/contentSearch\.search\(\{ serial: data\.serial,/, /callback\(\{ serial: reply\.serial,/]],
   ["search() cancels, records the request, then starts", CS, "  function search(",
@@ -128,9 +139,11 @@ function check() {
   const guards = {}
   const problems = []
   for (const [name, file, opener, patterns] of GUARDS) {
-    const text = body(file, opener)
-    if (text === null) { problems.push(`${name}: cannot find "${opener.trim()}" in ${file}`); continue }
-    guards[name] = patterns.every((p) => p.test(text))
+    const openers = [].concat(opener)
+    const texts = openers.map((o) => body(file, o))
+    const missing = openers.filter((o, i) => texts[i] === null)
+    if (missing.length) { problems.push(`${name}: cannot find "${missing[0].trim()}" in ${file}`); continue }
+    guards[name] = patterns.every((p) => p.test(texts.join("\n")))
   }
   const receive = body(NS, "  function receive(")
   if (receive === null) problems.push(`ReplyIdCheck: cannot find "function receive(" in ${NS}`)

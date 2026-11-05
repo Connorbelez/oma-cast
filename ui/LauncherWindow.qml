@@ -101,7 +101,15 @@ PanelWindow {
     && (contentDelay.running || window.backend.contentsSearching)
   property double rebuiltAt: 0
   property double contentsShownAt: 0
-  property bool contentsShown: false
+  // The section belongs to the view and query it was searched for. A rebuild
+  // for the same ones, such as a list refresh, keeps the search serial, the
+  // stillness timer, the search and the rows; a new query or view, a hide or
+  // a pop starts over. A reply that lands while a layer is open waits until
+  // the layer closes, so the selection never moves under it.
+  property var contents: ({ view: null, query: "", rows: [], held: null })
+  property var nameRows: []
+  readonly property bool layerOpen: window.actionPanelOpen || !!window.picker || !!window.alert || window.quickLook || window.aboutOpen
+  onLayerOpenChanged: if (!window.layerOpen && window.contents.held) Qt.callLater(window.applyHeld)
 
   // Inline argument pills for the selected command: argFocus -1 is the
   // search field, 0.. an argument.
@@ -207,49 +215,78 @@ PanelWindow {
 
 
   function rebuild(resetSelection, restoreIndex) {
-    var serial = ++window.searchSerial
+    var kept = window.contents.view === window.view && window.contents.query === window.query
+    var serial = kept ? window.searchSerial : ++window.searchSerial
     window.backend.cancelSearch()
-    window.cancelContents()
+    if (!kept) window.cancelContents()
     pointerGate.reset()
-    var keepId = !resetSelection && window.selectedRow ? window.selectedRow.itemId : ""
+    var keep = !resetSelection && window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents } : null
     window.searchPending = false
     if (window.view.kind === "alias") { Rows.update(rows, []); window.select(-1); return }
     window.searchPending = true
     var revision = window.backend.candidatesRevision
     var startedAt = Date.now()
-    window.rebuiltAt = startedAt
-    if (window.filesView) contentDelay.restart()
+    if (window.filesView && !kept) {
+      window.contents = { view: window.view, query: window.query, rows: [], held: null }
+      window.rebuiltAt = startedAt
+      contentDelay.restart()
+    }
     window.backend.searchAsync({ query: window.query, view: window.view, filter: window.atRoot ? window.rootFilter : "all" }, function(result) {
       if (serial !== window.searchSerial || revision !== window.backend.candidatesRevision) {
         window.backend.log("info", "search", "dropped a reply for an older query")
         return
       }
-      window.applySearch(result, keepId, restoreIndex)
+      window.applySearch(result, keep, restoreIndex)
       window.searchPending = false
       window.backend.log("debug", "search", "rows in " + (Date.now() - startedAt) + " ms")
     })
   }
 
-  function applySearch(result, keepId, restoreIndex) {
+  function applySearch(result, keep, restoreIndex) {
     if (!result.ok) {
+      window.nameRows = []
       Rows.update(rows, [])
       window.showToast("failure", result.error)
       window.select(-1)
       return
     }
-    var keepIndex = -1, next = []
+    var next = []
     for (var s = 0; s < result.data.length; s++) {
       var section = result.data[s]
       if (section.title || s > 0) next.push(window.rowData({ id: "section:" + section.id, title: section.title }, "section"))
       for (var r = 0; r < section.rows.length; r++) {
         var c = section.rows[r]
-        if (c.id === keepId) keepIndex = next.length
         next.push(window.rowData(c, c.kind === "calculator" ? "calculator" : "item"))
       }
     }
-    Rows.update(rows, next)
+    window.nameRows = next
+    var shown = window.withContents(next)
+    Rows.update(rows, shown.rows)
+    var keepIndex = window.indexOfRow(shown.rows, keep)
     if (restoreIndex >= 0 && restoreIndex < rows.count && window.isSelectable(restoreIndex)) window.select(restoreIndex)
     else window.select(keepIndex >= 0 ? keepIndex : window.nextSelectable(-1, 1))
+  }
+
+  // The name rows, with the Contents section when it has rows for this view
+  // and query, in place of the loose subsequence rows at their tail (and
+  // their header when no other row is left). cut is where the section starts.
+  function withContents(names) {
+    var c = window.contents
+    if (!c.rows.length || c.view !== window.view || c.query !== window.query) return { rows: names, cut: names.length }
+    var cut = names.length
+    while (cut > 0 && names[cut - 1].loose) cut--
+    if (cut < names.length && cut > 0 && names[cut - 1].rowKind === "section") cut--
+    var section = [window.rowData({ id: "section:contents", title: "Contents" }, "section")].concat(c.rows.map(function(m) {
+      return window.rowData(Object.assign({ inContents: true }, m), "item")
+    }))
+    return { rows: names.slice(0, cut).concat(section), cut: cut }
+  }
+
+  // A file can show as a name row and as a Contents row, so a row is its id
+  // and its section.
+  function indexOfRow(list, keep) {
+    for (var i = 0; keep && i < list.length; i++) if (list[i].itemId === keep.id && list[i].inContents === keep.inContents) return i
+    return -1
   }
 
   Timer {
@@ -258,41 +295,47 @@ PanelWindow {
     onTriggered: window.searchContents()
   }
 
-  // A Contents section on screen, or a search still due when the launcher
-  // hides, counts as cancelled too; ContentSearch logs the run it stops.
+  // A Contents section on screen or held, or a search still due when the
+  // launcher hides, counts as cancelled too; ContentSearch logs the run it
+  // stops.
   function cancelContents() {
-    var dropped = window.contentsShown || (contentDelay.running && !window.shown)
+    var dropped = window.contents.rows.length > 0 || !!window.contents.held || (contentDelay.running && !window.shown)
     contentDelay.stop()
-    window.contentsShown = false
-    if (!window.backend.cancelContents() && dropped) window.backend.log("info", "", "content: cancelled")
+    window.contents = { view: null, query: "", rows: [], held: null }
+    var running = window.backend.cancelContents()
+    if (dropped && !running) window.backend.log("info", "", "content: cancelled")
   }
 
   function searchContents() {
     var serial = window.searchSerial
     window.backend.searchContents({ query: window.query, serial: serial, forced: window.contentsForced }, function(reply) {
-      if (reply.serial !== window.searchSerial) {
-        window.backend.log("info", "", "content: dropped a reply for an older query")
-        return
-      }
       window.applyContents(reply)
     })
   }
 
-  // The Contents section goes below the name rows in one change, in place of
-  // the loose subsequence rows at their tail (and their header when no other
-  // row is left).
+  // ContentSearch delivers only its pending request, which every cancel
+  // replaces, so the serial check is a second layer. The selection stays on
+  // its row when the row stays. When the section replaced it, the selection
+  // goes to the last name row above the section, or to none, and to the
+  // first Contents row only when nothing was selected.
   function applyContents(reply) {
+    if (reply.serial !== window.searchSerial) return
+    if (window.layerOpen) { window.contents.held = reply; return }
     if (!reply.rows.length) return
-    var cut = rows.count
-    while (cut > 0 && rows.get(cut - 1).loose) cut--
-    if (cut < rows.count && cut > 0 && rows.get(cut - 1).rowKind === "section") cut--
-    if (cut < rows.count) rows.remove(cut, rows.count - cut)
-    rows.append([window.rowData({ id: "section:contents", title: "Contents" }, "section")].concat(reply.rows.map(function(c) {
-      return window.rowData(c, "item")
-    })))
-    if (window.selectedIndex < 0 || window.selectedIndex >= cut) window.select(window.nextSelectable(cut, 1))
-    window.contentsShown = true
+    var keep = window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents } : null
+    window.contents.rows = reply.rows
+    var shown = window.withContents(window.nameRows)
+    Rows.update(rows, shown.rows)
+    var at = window.indexOfRow(shown.rows, keep)
+    window.select(at >= 0 ? at : window.nextSelectable(shown.cut, keep ? -1 : 1))
     window.contentsShownAt = Date.now()
+  }
+
+  function applyHeld() {
+    var reply = window.contents.held
+    if (!reply || window.layerOpen) return
+    window.contents.held = null
+    window.applyContents(reply)
   }
 
   // With "logLevel": "debug", the time from the last keystroke's rebuild to
@@ -321,6 +364,7 @@ PanelWindow {
       disabled: !!c.disabled,
       favorite: typeof c.favoriteOrder === "number",
       loose: !!c.loose,
+      inContents: !!c.inContents,
       calcInput: String(c.calcInput || ""),
       calcResult: String(c.calcResult || ""),
       calcInputCaption: String(c.calcInputCaption || ""),

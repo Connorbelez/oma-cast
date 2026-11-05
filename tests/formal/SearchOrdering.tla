@@ -67,6 +67,7 @@ NoInput == -1
 \* starts at most one per rebuild, and every rebuild bumps the serial.
 NoCReq == [serial |-> 0, input |-> 0]
 NoRun == [serial |-> 0, input |-> 0, killed |-> FALSE]
+NoHeld == [serial |-> 0, input |-> 0]
 
 Init ==
   /\ ui = [shown |-> FALSE,      \* Launcher.opened / LauncherWindow.shown
@@ -78,7 +79,9 @@ Init ==
            cat |-> 0,            \* Backend.candidates, NativeSearch.ids/.entries
            rev |-> 0,            \* Backend.candidatesRevision
            ctimer |-> FALSE,     \* contentDelay, the 150 ms stillness timer, running
-           contentInput |-> NoInput] \* the input the Contents rows were computed for
+           contentInput |-> NoInput, \* the input the Contents rows were computed for
+           cfor |-> NoInput,     \* the input the files view's Contents record belongs to
+           held |-> NoHeld]      \* a content reply that landed under the panel or an alert
   /\ ns = [serial |-> 0,         \* NativeSearch.serial (request and load ids)
            loadId |-> 0,
            loaded |-> FALSE,
@@ -184,8 +187,9 @@ CsCancel(X) ==
   ELSE [X EXCEPT !.cs.req = NoCReq,
                  !.cs.run.killed = @ \/ X.cs.run.serial = X.cs.req.serial]
 
-\* window.cancelContents(): contentDelay.stop(), then ContentSearch.cancel().
-UiCancelContents(X) == CsCancel([X EXCEPT !.ui.ctimer = FALSE])
+\* window.cancelContents(): contentDelay.stop(), clear the Contents record
+\* (its input and any held reply), then ContentSearch.cancel().
+UiCancelContents(X) == CsCancel([X EXCEPT !.ui.ctimer = FALSE, !.ui.cfor = NoInput, !.ui.held = NoHeld])
 
 \* ContentSearch.start(): one run at a time. A request made while a killed
 \* run is still exiting starts when that run has exited.
@@ -196,20 +200,33 @@ CsStart(X) ==
 
 CsSearch(X, r) == CsStart([CsCancel(X) EXCEPT !.cs.req = r])
 
-\* The view's content callback: the serial guard, then applyContents().
+\* applyContents(), from the content callback or applyHeld(): the serial
+\* guard, then a reply that lands under the panel or an alert is held;
+\* otherwise the section goes in.
 UiContents(X, r) ==
   IF ContentSerialCheck => r.serial = X.ui.serial
-  THEN [X EXCEPT !.ui.contentInput = r.input,
-                 !.gh.staleContent = @ \/ r.input # X.ui.input]
+  THEN IF X.ui.overlay # "none"
+       THEN [X EXCEPT !.ui.held = r]
+       ELSE [X EXCEPT !.ui.contentInput = r.input,
+                      !.gh.staleContent = @ \/ r.input # X.ui.input]
   ELSE X
+
+\* A rebuild for the files view's Contents record's own input (a list
+\* refresh, new signals, a toast): the serial stays, nothing about contents
+\* is cancelled or restarted, and the synchronous answer puts the kept
+\* section back under the new rows.
+KeepRebuild(X) ==
+  LET X1 == IF CancelOnRebuild THEN NsCancel(X) ELSE X
+  IN [NsCancel(X1) EXCEPT !.ui.rowsInput = X1.ui.input, !.ui.pending = FALSE]
 
 \* rebuild() through Backend.searchAsync(). The first set member is the
 \* synchronous path (empty query, pushed or alias view, JS matcher); the
 \* second is a root query handed to NativeSearch. The files view is a
-\* synchronous view and the only one that restarts contentDelay; it is
-\* open only while shown, because popToRoot(), the one rebuild while
-\* hidden, leaves it first.
+\* synchronous view and the only one that restarts contentDelay and claims
+\* the Contents record for this input; it is open only while shown, because
+\* popToRoot(), the one rebuild while hidden, leaves it first.
 UiRebuild(X) ==
+  IF X.ui.cfor = X.ui.input THEN {KeepRebuild(X)} ELSE
   LET serial == X.ui.serial + 1
       X1 == [X EXCEPT !.ui.serial = serial]
       X2 == IF CancelOnRebuild THEN NsCancel(X1) ELSE X1
@@ -219,7 +236,7 @@ UiRebuild(X) ==
       X4 == NsCancel(X3)                     \* searchAsync(): nativeSearch.cancel()
       Sync == UiCallback(X4, req, Fallback(req))
   IN { Sync, NsSearch(X4, req) }
-     \cup (IF X4.ui.shown THEN {[Sync EXCEPT !.ui.ctimer = TRUE]} ELSE {})
+     \cup (IF X4.ui.shown THEN {[Sync EXCEPT !.ui.ctimer = TRUE, !.ui.cfor = X4.ui.input, !.ui.held = NoHeld]} ELSE {})
 
 -----------------------------------------------------------------------------
 (* User and environment events. Each costs one unit of the event budget.   *)
@@ -333,8 +350,8 @@ ContentKill == cs.req.serial # 0 /\ cs.run.serial = cs.req.serial /\ ~cs.run.kil
 
 \* The run exits on its own or from a signal, its output is read, and
 \* finished() delivers it when it is the pending request's run, then
-\* starts a request that waited. The watchdog's forced finish is the same
-\* step.
+\* starts a request that waited. The watchdog finishes only a run whose
+\* process never started, which is the same step.
 ContentExit == cs.run.serial # 0 /\ UNCHANGED env /\
   LET r == [serial |-> cs.run.serial, input |-> cs.run.input]
       current == cs.req.serial = cs.run.serial
@@ -343,11 +360,16 @@ ContentExit == cs.run.serial # 0 /\ UNCHANGED env /\
       X2 == IF current \/ ~ContentPendingCheck THEN UiContents(X1, r) ELSE X1
   IN Go(CsStart(X2))
 
+\* Qt.callLater(applyHeld) once the panel or alert has closed: the held
+\* reply goes through applyContents(), serial guard first.
+ApplyHeld == ui.held # NoHeld /\ ui.overlay = "none" /\ UNCHANGED env /\
+  Go(UiContents([S EXCEPT !.ui.held = NoHeld], ui.held))
+
 Next ==
   \/ Show \/ Hide \/ PopToRoot \/ Edit \/ Activate \/ OpenPanel \/ CloseOverlay
   \/ CalcRevision \/ Reindex
   \/ HelperStart \/ HelperStep \/ Receive \/ Timeout \/ HelperExit
-  \/ ContentFire \/ ContentKill \/ ContentExit
+  \/ ContentFire \/ ContentKill \/ ContentExit \/ ApplyHeld
 
 \* The helper and the timer make progress; the user may stop at any time.
 Spec == Init /\ [][Next]_vars
