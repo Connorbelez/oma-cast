@@ -63,6 +63,8 @@ PanelWindow {
   property string query: ""
   property int selectedIndex: -1
   property var selectedRow: null
+  // True when the launcher chose the selection, not the user.
+  property bool selectionAuto: false
   property int searchSerial: 0
   property bool searchPending: false
   property bool actionPanelOpen: false
@@ -220,7 +222,7 @@ PanelWindow {
     window.backend.cancelSearch()
     if (!kept) window.cancelContents()
     pointerGate.reset()
-    var keep = !resetSelection && window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents } : null
+    var keep = !resetSelection && window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents, auto: window.selectionAuto } : null
     window.searchPending = false
     if (window.view.kind === "alias") { Rows.update(rows, []); window.select(-1); return }
     window.searchPending = true
@@ -264,7 +266,8 @@ PanelWindow {
     Rows.update(rows, shown.rows)
     var keepIndex = window.indexOfRow(shown.rows, keep)
     if (restoreIndex >= 0 && restoreIndex < rows.count && window.isSelectable(restoreIndex)) window.select(restoreIndex)
-    else window.select(keepIndex >= 0 ? keepIndex : window.nextSelectable(-1, 1))
+    else if (keepIndex >= 0) window.select(keepIndex, keep.auto)
+    else window.select(window.nextSelectable(-1, 1), true)
   }
 
   // The name rows, with the Contents section when it has rows for this view
@@ -315,20 +318,28 @@ PanelWindow {
 
   // ContentSearch delivers only its pending request, which every cancel
   // replaces, so the serial check is a second layer. The selection stays on
-  // its row when the row stays. When the section replaced it, the selection
-  // goes to the last name row above the section, or to none, and to the
-  // first Contents row only when nothing was selected.
+  // its row when the row stays.
   function applyContents(reply) {
     if (reply.serial !== window.searchSerial) return
     if (window.layerOpen) { window.contents.held = reply; return }
     if (!reply.rows.length) return
-    var keep = window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents } : null
+    var keep = window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents, auto: window.selectionAuto } : null
     window.contents.rows = reply.rows
     var shown = window.withContents(window.nameRows)
     Rows.update(rows, shown.rows)
     var at = window.indexOfRow(shown.rows, keep)
-    window.select(at >= 0 ? at : window.nextSelectable(shown.cut, keep ? -1 : 1))
+    if (at >= 0) window.select(at, keep.auto)
+    else window.select(window.afterCut(shown.cut, keep), true)
     window.contentsShownAt = Date.now()
+  }
+
+  // Where the selection goes when the section replaced its row: the last
+  // name row above the section. With none above, a row the user chose leaves
+  // nothing selected, and a row the launcher chose, or no row, gives way to
+  // the first Contents row.
+  function afterCut(cut, keep) {
+    var above = window.nextSelectable(cut, -1)
+    return above >= 0 || (keep && !keep.auto) ? above : window.nextSelectable(cut, 1)
   }
 
   function applyHeld() {
@@ -384,7 +395,8 @@ PanelWindow {
     return -1
   }
 
-  function select(index) {
+  function select(index, auto) {
+    window.selectionAuto = !!auto
     if (index !== window.selectedIndex) {
       var previous = list.itemAtIndex(window.selectedIndex)
       if (previous) previous.selected = false
