@@ -280,7 +280,7 @@ Item {
   // Ranked in the same JS task as the reply that carries the flea hits, so
   // the launcher's serial guard covers the Files section too.
   function rootFileHits(query, ctx) {
-    var kind = RootSearch.fileQuery(query, ctx)
+    var kind = RootSearch.fileQuery(query, ctx, backend.candidates)
     if (kind === "name") return backend.searchFiles(query, RootSearch.ROOT_FILES_LIMIT).rows
     if (kind !== "path") return []
     var t0 = Date.now()

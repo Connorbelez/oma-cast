@@ -294,11 +294,12 @@ function isPathQuery(q) {
   return q.charAt(0) === "/" || q.indexOf("~/") === 0
 }
 
-function hasExactAlias(q, ctx) {
+function hasExactAlias(q, ctx, candidates) {
   var lower = q.toLowerCase()
   for (var id in ctx.commands || {}) {
     var s = ctx.commands[id]
-    if (s && s.alias && s.enabled !== false && String(s.alias).toLowerCase() === lower) return true
+    if (!s || !s.alias || s.enabled === false || String(s.alias).toLowerCase() !== lower) continue
+    if (!candidates || candidates.some(function(c) { return c.id === id })) return true
   }
   return false
 }
@@ -306,9 +307,9 @@ function hasExactAlias(q, ctx) {
 // "path" for a query typed as a path, "name" for one long enough to match
 // file names, "" when the root shows no files. Backend ranks files only for
 // a non-empty answer, so the empty root and short queries cost nothing.
-function fileQuery(query, ctx) {
+function fileQuery(query, ctx, candidates) {
   var q = String(query || "").trim()
-  if (!q || (ctx.filter && ctx.filter !== "all") || hasExactAlias(q, ctx)) return ""
+  if (!q || (ctx.filter && ctx.filter !== "all") || hasExactAlias(q, ctx, candidates)) return ""
   if (isPathQuery(q)) return "path"
   return q.length >= ROOT_FILES_MIN_LENGTH ? "name" : ""
 }
@@ -380,7 +381,7 @@ function rootSections(candidates, query, ctx, deps) {
     var results = deps.Ranker.rank(searchable, q, opts)
     var sections = []
     if (ctx.calculation && !filtered) sections.push({ id: "calculator", title: "Calculator", rows: [{ candidate: calculatorCandidate(ctx.calculation), record: null }] })
-    var kind = fileQuery(q, ctx)
+    var kind = fileQuery(q, ctx, candidates)
     var files = kind ? fileRows(ctx.fileHits || [], kind) : []
     if (kind === "path" && files.length) return [{ id: "files", title: "Files", rows: files }]
     if (results.length > 0) sections.push({ id: "results", title: "Results", rows: results })

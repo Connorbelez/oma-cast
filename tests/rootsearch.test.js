@@ -280,6 +280,9 @@ test("root files: an exact alias keeps the top and hides the files", () => {
   assert.equal(RS.fileQuery("spe", ctx(extra)), "name", "an alias prefix does not hide them")
   const disabled = { commands: { "builtin:calculator-history": { alias: "spec", enabled: false } } }
   assert.equal(RS.fileQuery("spec", ctx(disabled)), "name", "a disabled command's alias does not either")
+  const gone = { commands: { "app:gone": { alias: "spec" } } }
+  assert.equal(RS.fileQuery("spec", ctx(gone), candidates()), "name", "an alias left by a removed command does not either")
+  assert.deepEqual(sectionIds(withFiles("spec", SPEC_HITS, gone)), ["files", "fallback-commands"], "the stale alias hides nothing and matches no row")
 })
 
 test("root files: the Applications and Commands filters leave files out", () => {
@@ -303,6 +306,11 @@ test("root files: a path query lists the files under it, busiest folder first, c
   assert.equal(result.hits, 5)
   assert.deepEqual(pathsOf(result), ["Projects/oma-cast/SPEC.md", "Projects/oma-cast/core/RootSearch.js", "Projects/oma-cast/node_modules/x/deep/index.js"])
   assert.ok(result.rows.every((r) => r.band === 6))
+})
+
+test("root files: equal usage scores break on the shorter path, not the alphabet", () => {
+  const rows = ["Projects/oma-cast/zz.md", "Projects/oma-cast/aaa/bbb.md"].map(fileRow)
+  assert.deepEqual(pathsOf(RS.pathHits(rows, "~/pro", pathSignals(), 3, FileRanker)), ["Projects/oma-cast/zz.md", "Projects/oma-cast/aaa/bbb.md"])
 })
 
 test("root files: a path query narrows to a file name and takes an absolute path", () => {
