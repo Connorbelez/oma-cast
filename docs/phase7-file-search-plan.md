@@ -205,10 +205,10 @@ Each live lane is a delegated worker at the PR head. Use `delegate_task` with `i
 - [ ] Lane 10. No argv leak. During a preview of a file whose name holds a space, `ps -eo args | grep '[p]dftotext\|[w]l-copy'`. Save the `ps` output as `no-argv-leak.txt`. Pass when no process line contains typed query text, only file paths.
 
 **Verify, perf.** Tests alone are not sufficient verification. A PR is verified only when its unit, live, and perf boxes are all checked.
-- [ ] Metric. Time from a selection change to the preview painted, from the `files: preview` log line, at head. Trunk lacks the pane, so the diff-added work is the preview load and the end state is the painted pane. Also the rows time at trunk and head from lane 1.
+- [ ] Metric. The preview load time from the `files: preview <kind> <ms> ms` log line at head, and the time from a selection change to the preview painted, which includes the 80 ms still-time that keeps arrowing from reading every file (amended 2026-11-04: the two are reported separately). Trunk lacks the pane, so the diff-added work is the preview load and the end state is the painted pane. Also the rows time at trunk and head from lane 1.
 - [ ] Probe. Arrow through ten rows with `$V key down` at 200 ms intervals and read ten `files: preview` lines. Repeat at trunk for the rows time only.
 - [ ] Baseline. Record trunk's rows time first.
-- [ ] Rule. Rows slower than trunk by more than 10 ms, fails. A text or image preview over 100 ms, fails. A PDF preview over 500 ms, fails.
+- [ ] Rule. Rows slower than trunk by more than 10 ms, fails. A text or image preview load over 100 ms, or a selection-to-painted time over 180 ms (the still-time plus the load bar), fails. A PDF preview load over 500 ms, fails. (Amended 2026-11-04: the owner measured image loads of 12 to 61 ms landing 93 to 144 ms after the selection because the 80 ms still-time comes first; the bar applies to the load, countersigned in the trail.)
 
 **Review gate.** The operator reviews before merge.
 - [ ] Copy lane 2, lane 3 and lane 7 screenshots into `docs/screenshots/phase7/p7-3-review-text.png`, `docs/screenshots/phase7/p7-3-review-image.png` and `docs/screenshots/phase7/p7-3-review-trash.png`.

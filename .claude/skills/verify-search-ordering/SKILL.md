@@ -46,9 +46,9 @@ Last confirmed against the code at commit **`10e58bc`** (sync commit).
 | Code | Model | Anchor |
 |---|---|---|
 | `ui/LauncherWindow.qml` `rebuild()` and its callback, `applySearch()` | `UiRebuild`, `UiCallback` | `GuardSerial`, `GuardRevision`, `CancelOnRebuild`, shape "rebuild sets searchPending…" |
-| `ui/LauncherWindow.qml` `perform()` (Enter, Ctrl+Enter, Ctrl+1–9, click, panel entry) | `Activate` | `GuardPerform`, shape "perform and confirmAlert are the only callers of request()" |
+| `ui/LauncherWindow.qml` `perform()` (Enter, Ctrl+Enter, Ctrl+1–9, click, panel entry) | `Activate` | `GuardPerform`, shape "perform, confirmAlert and pick are the only callers of request()" |
 | `ui/LauncherWindow.qml` `actionsForSelected()`, `toggleActionPanel()` | `OpenPanel` | `GuardActions` |
-| `ui/LauncherWindow.qml` `confirmAlert()`, alert and panel Esc | `CloseOverlay` | none (no guard) |
+| `ui/LauncherWindow.qml` `confirmAlert()` and `pick()` (each replays the payload its alert or picker opened with), alert, picker and panel Esc | `CloseOverlay` | none (no guard) |
 | `ui/LauncherWindow.qml` `onShownChanged`, `prepare()`, `popToRoot()` | `Hide`, `Show`, `PopToRoot` | `CancelOnHide` |
 | `ui/LauncherWindow.qml` `setQuery`, `push`, `pop`, `setRootFilter`, `recallHistory` | `Edit` | shape "every query write is followed by rebuild()" |
 | `ui/LauncherWindow.qml` `onCandidatesRevisionChanged`, `onCalculatorRevisionChanged` | `Reindex` (last step), `CalcRevision` | `CalcSkipsAlert`, shapes for both conditions |

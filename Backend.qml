@@ -212,10 +212,12 @@ Item {
   }
 
   // A path that reaches rg's argv or the ignore file: absolute, so it cannot
-  // read as a flag, and one line, so it cannot add a second pattern.
+  // read as a flag, one line, so it cannot add a second pattern, and
+  // normalised, so the trash's check that a path is under the home dir holds.
   function checkFilePath(value) {
     var path = String(value || "")
     if (path.charAt(0) !== "/" || /[\n\r\0]/.test(path)) throw new Error("Expected an absolute path, got " + JSON.stringify(path))
+    if (/\/\/|\/\.\.?(\/|$)/.test(path)) throw new Error("Expected a normalised path, got " + JSON.stringify(path))
     return path.replace(/\/+$/, "") || "/"
   }
 
@@ -282,14 +284,82 @@ Item {
   }
 
   // The path is the file's own, never the typed query, and starts with "/",
-  // so xdg-open cannot read it as a flag. Only a listed file opens, so an IPC
-  // caller cannot open or record a private path the list leaves out.
+  // so no program reads it as a flag. Only a listed file is acted on, so an
+  // IPC caller cannot open, preview or record a private path the list
+  // leaves out.
   function openFile(value) {
-    var path = backend.checkFilePath(value)
-    if (!fileLister.rows.some(function(r) { return r.path === path })) throw new Error("not in the file list")
+    var path = fileActions.listedPath(value, fileLister.rows)
     backend.recordVisit(path, "")
     Util.execArgv(["uwsm-app", "--", "xdg-open", path])
     return { close: true, hud: path.slice(path.lastIndexOf("/") + 1) }
+  }
+
+  property var lastPreview: null
+
+  function previewFile(value, done) {
+    try {
+      var path = fileActions.listedPath(value, fileLister.rows)
+    } catch (e) {
+      return { ok: false, error: e.message }
+    }
+    fileActions.preview(path, function(preview) {
+      backend.lastPreview = preview
+      done(preview)
+    })
+    return { ok: true }
+  }
+
+  function cancelPreview() { fileActions.cancelPreview() }
+
+  function openWithOptions() {
+    return backend.appEntries().map(function(e) {
+      return { id: e.id, title: String(e.name || e.id), shortcut: "", section: "apps", icon: " " }
+    }).sort(function(a, b) { return a.title.localeCompare(b.title) })
+  }
+
+  function fileAction(data) {
+    var action = String(data.action || "open")
+    var id = String(data.id).slice("file:".length)
+    if (fileActions.trashing(id, fileLister.rows)) return {}
+    var path = fileActions.listedPath(id, fileLister.rows)
+    var name = path.slice(path.lastIndexOf("/") + 1)
+    switch (action) {
+      case "open":
+        return backend.openFile(path)
+      case "show-in-folder":
+        fileActions.showInFolder(path)
+        return { close: true }
+      case "open-with":
+        if (!data.option) return { pick: { placeholder: "Open " + name + " with…", options: backend.openWithOptions() } }
+        var app = backend.appEntries().filter(function(e) { return e.id === String(data.option) })[0]
+        if (!app) throw new Error("Unknown app " + data.option)
+        backend.recordVisit(path, "")
+        fileActions.openWith(path, app.id + ".desktop")
+        return { close: true, hud: name }
+      case "copy-path":
+        clipboard.copy(path)
+        return { close: true, hud: "Copied to Clipboard" }
+      case "trash":
+        var target = fileActions.trashPath(path, fileLister.rows, backend.paths.home)
+        if (!data.confirmed) return { confirm: { title: "Move to Trash", message: "Move " + name + " to the Trash?", primary: "Move to Trash", destructive: true } }
+        fileActions.trash(target)
+        return {}
+    }
+    throw new Error("Unknown action " + action)
+  }
+
+  FileActions {
+    id: fileActions
+    onMessage: function(level, text, metadata) { backend.log(level, "", text, metadata) }
+    onTrashed: function(path, ok) {
+      if (ok) {
+        fileLister.rows = fileLister.rows.filter(function(r) { return r.path !== path })
+        fileLister.dirty = true
+        if (frecencyStore.loaded && frecencyStore.doc.items[path]) frecencyStore.update(function(doc) { delete doc.items[path] })
+      }
+      backend.log(ok ? "info" : "warning", "", ok ? "files: moved a file to the Trash" : "files: gio trash failed")
+      backend.emit("files.trashed", { path: path, name: path.slice(path.lastIndexOf("/") + 1), ok: ok })
+    }
   }
 
   FileLister {
@@ -544,7 +614,7 @@ Item {
         var rowId = String(data && data.id || "")
         if (rowId === RootSearch.CALCULATOR_ID) return RootSearch.actionsFor({ kind: "calculator" })
         if (rowId.indexOf("calculator-history:") === 0) return RootSearch.actionsFor({ kind: "calculator-history" })
-        if (rowId.indexOf("file:") === 0) return [{ id: "open", title: "Open", shortcut: "↵", section: "primary", icon: "" }]
+        if (rowId.indexOf("file:") === 0) return fileActions.list
         var candidate = backend.decorated(rowId)
         if (!candidate) {
           var fallback = RootSearch.FALLBACKS.filter(function(f) { return f.id === data.id })[0]
@@ -595,7 +665,7 @@ Item {
           if (!entry) throw new Error("No such history entry")
           return backend.calculatorAction(String(data.action || "open"), entry, entry.id)
         }
-        if (data && String(data.id).indexOf("file:") === 0 && String(data.action || "open") === "open") return backend.openFile(String(data.id).slice("file:".length))
+        if (data && String(data.id).indexOf("file:") === 0) return backend.fileAction(data)
         return backend.performAction(data)
       },
       getSearchHistory: function() { return frecencyStore.loaded ? frecencyStore.doc.searchHistory : [] }
@@ -648,11 +718,26 @@ Item {
         return backend.searchFiles(String(data && data.query || ""), limit)
       },
       open: function(data) { return backend.openFile(data && data.path) },
+      preview: function(data) {
+        var path = fileActions.listedPath(data && data.path, fileLister.rows)
+        if (backend.lastPreview && backend.lastPreview.path === path) return backend.lastPreview
+        fileActions.preview(path, function(preview) { backend.lastPreview = preview })
+        return { path: path, pending: true }
+      },
+      showInFolder: function(data) { return backend.fileAction({ id: "file:" + (data && data.path), action: "show-in-folder" }) },
+      copyPath: function(data) { return backend.fileAction({ id: "file:" + (data && data.path), action: "copy-path" }) },
+      openWith: function(data) {
+        var outcome = backend.fileAction({ id: "file:" + (data && data.path), action: "open-with", option: data && data.app })
+        return outcome.pick ? { apps: outcome.pick.options.map(function(o) { return { id: o.id, name: o.title } }) } : outcome
+      },
+      trash: function(data) {
+        backend.fileAction({ id: "file:" + (data && data.path), action: "trash", confirmed: true })
+        return { started: true }
+      },
       refresh: function(data) {
         var roots = data && data.roots !== undefined ? data.roots : fileLister.defaultRoots
         if (!Array.isArray(roots) || roots.length < 1 || roots.length > 2) throw new Error("roots must be one or two absolute paths")
-        roots.forEach(function(r) { backend.checkFilePath(r) })
-        return { started: fileLister.refresh(roots) }
+        return { started: fileLister.refresh(roots.map(function(r) { return backend.checkFilePath(r) })) }
       },
       largeSubtrees: function() {
         var askedAt = backend.fileSearchSettings().askedAt
