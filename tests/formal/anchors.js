@@ -21,18 +21,19 @@ const root = path.join(__dirname, "..", "..")
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8")
 
 // The text of one function or handler: from its opening line to the closing
-// brace at the same indent (or the single line, for one-liners).
+// brace at the opening line's indent, or that line alone when it opens no
+// block.
 function body(file, opener) {
   const source = read(file)
   const start = source.indexOf(opener)
   if (start < 0) return null
   const lineStart = source.lastIndexOf("\n", start) + 1
-  const indent = source.slice(lineStart, start).match(/^\s*/)[0]
+  const indent = source.slice(lineStart).match(/^[ \t]*/)[0]
   const lineEnd = source.indexOf("\n", start)
   const firstLine = source.slice(start, lineEnd < 0 ? undefined : lineEnd)
   const opens = (firstLine.match(/{/g) || []).length
   const closes = (firstLine.match(/}/g) || []).length
-  if (opens > 0 && opens === closes) return firstLine
+  if (opens === closes) return firstLine
   const end = source.indexOf("\n" + indent + "}", start)
   return end < 0 ? null : source.slice(start, end + indent.length + 2)
 }
@@ -41,12 +42,14 @@ const LW = "ui/LauncherWindow.qml"
 const NS = "services/NativeSearch.qml"
 const BE = "Backend.qml"
 const RS = "search/src/protocol.rs"
+const CS = "services/ContentSearch.qml"
 
-// [constant, file, opener, [patterns that must all match]]
+// [constant, file, opener or [openers], [patterns that must all match in
+// their joined text]]
 const GUARDS = [
   ["GuardPerform", LW, "  function perform(", [/if \(window\.searchPending\) return/]],
   ["GuardActions", LW, "  function actionsForSelected(", [/if \(window\.searchPending \|\|[^)]*\) return \[\]/]],
-  ["GuardSerial", LW, "  function rebuild(", [/var serial = \+\+window\.searchSerial/, /serial !== window\.searchSerial/]],
+  ["GuardSerial", LW, "  function rebuild(", [/var serial = kept \? window\.searchSerial : \+\+window\.searchSerial/, /serial !== window\.searchSerial/]],
   ["GuardRevision", LW, "  function rebuild(", [/var revision = window\.backend\.candidatesRevision/, /revision !== window\.backend\.candidatesRevision/]],
   ["CancelOnRebuild", LW, "  function rebuild(", [/window\.backend\.cancelSearch\(\)/]],
   ["CancelOnHide", LW, "  onShownChanged: {", [/window\.searchSerial\+\+/, /window\.backend\.cancelSearch\(\)/, /window\.searchPending = false/]],
@@ -54,6 +57,11 @@ const GUARDS = [
   ["InvalidateCancels", NS, "  function invalidate(", [/service\.cancel\(\)/, /if \(request\) request\.callback\(null\)/]],
   ["SendOnlyWhenLoaded", NS, "  function search(", [/else if \(service\.loaded\) service\.send\(\)/]],
   ["CalcSkipsAlert", LW, "    function onCalculatorRevisionChanged(", [/!window\.alert/]],
+  ["ContentSerialCheck", LW, ["  function searchContents(", "  function applyContents("],
+    [/var serial = window\.searchSerial/, /serial: serial/, /function\(reply\) \{\s*\n\s*window\.applyContents\(reply\)/, /^  function applyContents\(reply\) \{\s*\n\s*if \(reply\.serial !== window\.searchSerial\) return\n/m]],
+  ["ContentPendingCheck", CS, "  function finished(", [/if \(request && request === service\.pending\) \{/]],
+  ["CancelContentOnRebuild", LW, "  function rebuild(", [/\n    if \(!kept\) window\.cancelContents\(\)\n/]],
+  ["CancelContentOnHide", LW, "  onShownChanged: {", [/window\.cancelContents\(\)/]],
 ]
 
 // receive() drops a reply whose id is not pending if either filter is there.
@@ -67,7 +75,7 @@ const SHAPES = [
   ["Backend.searchAsync answers empty queries and pushed views synchronously", BE, "  function searchAsync(",
     [/nativeSearch\.cancel\(\)/, /if \(!query \|\| \(view && view\.kind !== "root"\)\)/, /nativeSearch\.search\(/]],
   ["rebuild sets searchPending before searching and clears it in the guarded callback", LW, "  function rebuild(",
-    [/window\.searchPending = true[\s\S]*window\.backend\.searchAsync\(/, /window\.applySearch\(result, keepId, restoreIndex\)\s*\n\s*window\.searchPending = false/]],
+    [/window\.searchPending = true[\s\S]*window\.backend\.searchAsync\(/, /window\.applySearch\(result, keep, restoreIndex\)\s*\n\s*window\.searchPending = false/]],
   ["candidate reloads rebuild only when shown with no panel or alert", LW, "    function onCandidatesRevisionChanged(",
     [/if \(window\.shown && !window\.actionPanelOpen && !window\.alert\) window\.rebuild\(false\)/]],
   ["calculator updates rebuild when shown, no panel and a query", LW, "    function onCalculatorRevisionChanged(",
@@ -92,6 +100,42 @@ const SHAPES = [
   ["rootFileHits ranks synchronously and takes no callback", BE, "  function rootFileHits(",
     [/^  function rootFileHits\(query, ctx\) \{/, /return backend\.searchFiles\(/, /RootSearch\.pathHits\(/,
       /^  function rootFileHits\(query, ctx\) \{(?:(?!Qt\.callLater|\bProcess\b|function\s*\()[\s\S])*?\n  \}/]],
+  ["cancelContents stops the stillness timer, clears the Contents record, then cancels ContentSearch whatever it logs", LW, "  function cancelContents(",
+    [/contentDelay\.stop\(\)\n    window\.contents = \{ view: null, query: "", rows: \[\], held: null, revision: -1 \}\n    (?:var \w+ = )?window\.backend\.cancelContents\(\)\n/]],
+  ["a rebuild for the Contents record's own view and query keeps the serial, the timer and the section or claims a new record; any other rebuild in the files view claims a new record", LW, "  function rebuild(",
+    [/^  function rebuild\(resetSelection, restoreIndex\) \{\n    var kept = window\.keepsContents\(\)\n/,
+      /if \(window\.filesView && !kept\) \{\n      window\.contents = \{ view: window\.view, query: window\.query, rows: \[\], held: null, revision: -1 \}\n/]],
+  ["keepsContents keeps only the record for this view and query, and changes nothing but its rows", LW, "  function keepsContents(",
+    [/^  function keepsContents\(\) \{\n    var c = window\.contents\n    if \(c\.view !== window\.view \|\| c\.query !== window\.query\) return false\n/,
+      /^(?![\s\S]*(?:contentDelay|cancelContents|searchSerial|searchContents|window\.contents =|\.held =))/]],
+  ["a content reply that lands while a layer is open is held, and applyHeld puts it through applyContents once every layer is closed", LW, "  function applyContents(",
+    [/^  function applyContents\(reply\) \{\s*\n\s*if \(reply\.serial !== window\.searchSerial\) return\n\s*if \(window\.layerOpen\) \{ window\.contents\.held = reply; return \}\n/]],
+  ["applyHeld waits for every layer to close and clears the held reply before applying it", LW, "  function applyHeld(",
+    [/if \(!reply \|\| window\.layerOpen\) return\n\s*window\.contents\.held = null\n\s*window\.applyContents\(reply\)/]],
+  ["closing the last layer with a reply held calls applyHeld", LW, "  onLayerOpenChanged:",
+    [/^  onLayerOpenChanged: if \(!window\.layerOpen && window\.contents\.held\) Qt\.callLater\(window\.applyHeld\)$/]],
+  ["Backend.cancelContents is ContentSearch.cancel", BE, "  function cancelContents(", [/^  function cancelContents\(\) \{ return contentSearch\.cancel\(\) \}$/]],
+  ["rebuild restarts the stillness timer only in the files view for a new record, after any cancel and before the synchronous search", LW, "  function rebuild(",
+    [/if \(window\.filesView && !kept\) \{\n(?:      [^\n]*\n)*?      contentDelay\.restart\(\)\n    \}\n    window\.backend\.searchAsync\(/, /contentDelay\.restart\(\)(?![\s\S]*window\.cancelContents\(\))/]],
+  ["popToRoot leaves the files view before its rebuild, so no hidden rebuild restarts the stillness timer", LW, "  function popToRoot(",
+    [/window\.stack = \[\{ kind: "root"[\s\S]*window\.rebuild\(true\)/]],
+  ["the files view answers synchronously in rootSearch.search", BE, "      search: function(data) {",
+    [/view\.kind === "files"\) sections = view\.filter === "contents" \? \[\] : backend\.fileSections\(query\)/]],
+  ["applySearch replaces every row and puts back only a Contents section that belongs to this view and query", LW, "  function applySearch(", [/var shown = window\.withContents\(next\)\n\s*Rows\.update\(rows, shown\.rows\)/]],
+  ["withContents shows the section only for the view and query it was searched for", LW, "  function withContents(",
+    [/if \(!c\.rows\.length \|\| c\.view !== window\.view \|\| c\.query !== window\.query\) return \{ rows: names, cut: names\.length \}/]],
+  ["Backend.searchContents hands the request's serial back with the reply", BE, "  function searchContents(",
+    [/contentSearch\.search\(\{ serial: data\.serial,/, /callback\(\{ serial: reply\.serial,/]],
+  ["search() cancels, records the request, then starts", CS, "  function search(",
+    [/service\.cancel\(\)\s*\n\s*service\.pending = \{[^\n]*\}\s*\n\s*service\.start\(\)/]],
+  ["start() runs one request at a time and waits for a killed run to exit", CS, "  function start(",
+    [/if \(!request \|\| run\.request \|\| run\.running\) return/, /run\.request = request/, /killTimer\.restart\(\)/]],
+  ["cancel() drops the pending request and signals only its own run", CS, "  function cancel(",
+    [/service\.pending = null/, /killTimer\.stop\(\)/, /if \(run\.request === request && run\.running\) run\.signal\(15\)/]],
+  ["kill() signals the pending request's run and keeps the request pending", CS, "  function kill(",
+    [/if \(!request \|\| run\.request !== request \|\| !run\.running\) return/, /run\.signal\(15\)/, /^(?![\s\S]*service\.pending =)/]],
+  ["finished() waits for exit and output, clears the run, delivers, then starts a waiting request", CS, "  function finished(",
+    [/if \(!run\.exited \|\| !run\.streamed\) return/, /run\.request = null[\s\S]*service\.pending = null[\s\S]*request\.callback\(\{ serial: request\.serial,[\s\S]*\}\s*\n\s*service\.start\(\)\s*\n  \}$/]],
   ["the helper answers one line at a time, in order", RS, "pub(crate) fn run(",
     [/read_until\(b'\\n'/, /response\(&line, &mut catalog\)/, /writer\.flush\(\)\?/]],
 ]
@@ -100,9 +144,11 @@ function check() {
   const guards = {}
   const problems = []
   for (const [name, file, opener, patterns] of GUARDS) {
-    const text = body(file, opener)
-    if (text === null) { problems.push(`${name}: cannot find "${opener.trim()}" in ${file}`); continue }
-    guards[name] = patterns.every((p) => p.test(text))
+    const openers = [].concat(opener)
+    const texts = openers.map((o) => body(file, o))
+    const missing = openers.filter((o, i) => texts[i] === null)
+    if (missing.length) { problems.push(`${name}: cannot find "${missing[0].trim()}" in ${file}`); continue }
+    guards[name] = patterns.every((p) => p.test(texts.join("\n")))
   }
   const receive = body(NS, "  function receive(")
   if (receive === null) problems.push(`ReplyIdCheck: cannot find "function receive(" in ${NS}`)
@@ -115,6 +161,19 @@ function check() {
   }
   const callers = (read(LW).match(/window\.request\(/g) || []).length
   if (callers !== 3) problems.push(`shape "perform, confirmAlert and pick are the only callers of request()": found ${callers} calls to window.request( in ${LW}, expected 3`)
+  const lw = read(LW)
+  if (!/Timer \{\s*id: contentDelay\s*interval: 150\s*onTriggered: window\.searchContents\(\)\s*\}/.test(lw))
+    problems.push(`shape "contentDelay is the only caller of searchContents()": the contentDelay Timer in ${LW} changed`)
+  const contentCalls = (lw.match(/window\.searchContents\(/g) || []).length
+  if (contentCalls !== 1) problems.push(`shape "contentDelay is the only caller of searchContents()": found ${contentCalls} calls to window.searchContents( in ${LW}, expected 1`)
+  const layers = (lw.match(/^  readonly property bool layerOpen: (.*)$/m) || [null, ""])[1].split(" || ").sort().join(" || ")
+  if (layers !== "!!window.alert || !!window.picker || window.aboutOpen || window.actionPanelOpen || window.quickLook")
+    problems.push(`shape "layerOpen is true while the action panel, the picker, an alert, Quick Look or the About panel is open": the layerOpen binding in ${LW} changed`)
+  const cs = read(CS)
+  if (!/id: killTimer\s*interval: service\.killAfterMs\s*onTriggered: service\.kill\(\)/.test(cs))
+    problems.push(`shape "the kill timer calls kill()": the killTimer in ${CS} changed`)
+  if (!/onExited: function\(exitCode, exitStatus\) \{[^}]*run\.exited = true\s*\n\s*service\.finished\(\)/.test(cs))
+    problems.push(`shape "the run's exit reaches finished()": the onExited handler in ${CS} changed`)
   const writes = (read(LW).match(/window\.query = /g) || []).length
   if (writes !== 6) problems.push(`shape "every query write is followed by rebuild()": found ${writes} "window.query = " in ${LW}, expected 6; check the new one rebuilds, then update this count`)
   return { guards, problems }

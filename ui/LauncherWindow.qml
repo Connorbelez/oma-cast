@@ -63,6 +63,8 @@ PanelWindow {
   property string query: ""
   property int selectedIndex: -1
   property var selectedRow: null
+  // True when the launcher chose the selection, not the user.
+  property bool selectionAuto: false
   property int searchSerial: 0
   property bool searchPending: false
   property bool actionPanelOpen: false
@@ -70,7 +72,8 @@ PanelWindow {
   property var toast: null
   property int historyIndex: -1
 
-  // Ctrl+P root filter (RootSearch.FILTERS), Ctrl+T toast actions,
+  // Ctrl+P filter (RootSearch.FILTERS at the root, Names / Contents in
+  // Search Files), Ctrl+T toast actions,
   // Ctrl+Shift+K About panel and the confirm alert.
   property string rootFilter: "all"
   property bool dropdownOpen: false
@@ -92,6 +95,26 @@ PanelWindow {
   property bool previewLogged: false
   property bool quickLook: false
 
+  // The files view's Contents section (SPEC §8.6) searches once the query
+  // has been still for 150 ms [I].
+  readonly property var fileFilters: [{ id: "names", title: "Names" }, { id: "contents", title: "Contents" }]
+  readonly property bool contentsForced: window.filesView && window.view.filter === "contents"
+  readonly property bool contentsComing: window.filesView && window.query.trim().length >= window.backend.contentMinChars
+    && (contentDelay.running || window.backend.contentsSearching)
+  property double rebuiltAt: 0
+  property double contentsShownAt: 0
+  // The section belongs to the view and query it was searched for. A rebuild
+  // for the same ones, such as a list refresh, keeps the search serial, the
+  // stillness timer, the search and the rows of files still listed; a new
+  // query or view, a hide or a pop starts over. A reply that lands while a
+  // layer is open waits until the layer closes, so the selection never moves
+  // under it. revision is the filesRevision a reply was filtered at, -1
+  // before one lands.
+  property var contents: ({ view: null, query: "", rows: [], held: null, revision: -1 })
+  property var nameRows: []
+  readonly property bool layerOpen: window.actionPanelOpen || !!window.picker || !!window.alert || window.quickLook || window.aboutOpen
+  onLayerOpenChanged: if (!window.layerOpen && window.contents.held) Qt.callLater(window.applyHeld)
+
   // Inline argument pills for the selected command: argFocus -1 is the
   // search field, 0.. an argument.
   property var argDefs: []
@@ -107,6 +130,8 @@ PanelWindow {
   readonly property string actionPanelKeys: window.vim ? "Alt K" : "Ctrl K"
 
   readonly property bool atRoot: window.stack.length === 1
+  readonly property var filters: window.atRoot ? RootSearch.FILTERS : window.filesView ? window.fileFilters : []
+  readonly property string filterId: window.atRoot ? window.rootFilter : window.contentsForced ? "contents" : "names"
   readonly property bool compact: window.general.windowMode === "compact" && window.atRoot && !window.query
   readonly property string placeholder: window.view.kind === "alias" ? "Type an alias, then press ↵"
     : window.view.kind === "menu" ? "Search " + window.view.title + "…"
@@ -151,6 +176,7 @@ PanelWindow {
     if (window.shown) return
     window.searchSerial++
     window.backend.cancelSearch()
+    window.cancelContents()
     window.searchPending = false
     window.closePopups()
     window.clearPreview()
@@ -193,46 +219,161 @@ PanelWindow {
 
 
   function rebuild(resetSelection, restoreIndex) {
-    var serial = ++window.searchSerial
+    var kept = window.keepsContents()
+    var serial = kept ? window.searchSerial : ++window.searchSerial
     window.backend.cancelSearch()
+    if (!kept) window.cancelContents()
     pointerGate.reset()
-    var keepId = !resetSelection && window.selectedRow ? window.selectedRow.itemId : ""
+    var keep = !resetSelection && window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents, auto: window.selectionAuto } : null
     window.searchPending = false
     if (window.view.kind === "alias") { Rows.update(rows, []); window.select(-1); return }
     window.searchPending = true
     var revision = window.backend.candidatesRevision
     var startedAt = Date.now()
+    if (window.filesView && !kept) {
+      window.contents = { view: window.view, query: window.query, rows: [], held: null, revision: -1 }
+      window.rebuiltAt = startedAt
+      contentDelay.restart()
+    }
     window.backend.searchAsync({ query: window.query, view: window.view, filter: window.atRoot ? window.rootFilter : "all" }, function(result) {
       if (serial !== window.searchSerial || revision !== window.backend.candidatesRevision) {
         window.backend.log("info", "search", "dropped a reply for an older query")
         return
       }
-      window.applySearch(result, keepId, restoreIndex)
+      window.applySearch(result, keep, restoreIndex)
       window.searchPending = false
       window.backend.log("debug", "search", "rows in " + (Date.now() - startedAt) + " ms")
     })
   }
 
-  function applySearch(result, keepId, restoreIndex) {
+  // A rebuild for the record's own view and query keeps it, without the rows
+  // whose files left the list. When none is left and the list changed since
+  // the reply, the rebuild starts a new record, so files the new list holds
+  // can show.
+  function keepsContents() {
+    var c = window.contents
+    if (c.view !== window.view || c.query !== window.query) return false
+    c.rows = window.backend.listedFiles(c.rows)
+    return c.rows.length > 0 || c.revision < 0 || c.revision === window.backend.filesRevision
+  }
+
+  function applySearch(result, keep, restoreIndex) {
     if (!result.ok) {
+      window.nameRows = []
       Rows.update(rows, [])
       window.showToast("failure", result.error)
       window.select(-1)
       return
     }
-    var keepIndex = -1, next = []
+    var next = []
     for (var s = 0; s < result.data.length; s++) {
       var section = result.data[s]
       if (section.title || s > 0) next.push(window.rowData({ id: "section:" + section.id, title: section.title }, "section"))
       for (var r = 0; r < section.rows.length; r++) {
         var c = section.rows[r]
-        if (c.id === keepId) keepIndex = next.length
         next.push(window.rowData(c, c.kind === "calculator" ? "calculator" : "item"))
       }
     }
-    Rows.update(rows, next)
+    window.nameRows = next
+    var shown = window.withContents(next)
+    Rows.update(rows, shown.rows)
+    var keepIndex = window.indexOfRow(shown.rows, keep)
     if (restoreIndex >= 0 && restoreIndex < rows.count && window.isSelectable(restoreIndex)) window.select(restoreIndex)
-    else window.select(keepIndex >= 0 ? keepIndex : window.nextSelectable(-1, 1))
+    else if (keepIndex >= 0) window.select(keepIndex, keep.auto)
+    else if (keep && keep.inContents) window.select(window.afterCut(shown.cut, keep), true)
+    else window.select(window.nextSelectable(-1, 1), true)
+  }
+
+  // The name rows, with the Contents section when it has rows for this view
+  // and query, in place of the loose subsequence rows at their tail (and
+  // their header when no other row is left). cut is where the section starts.
+  function withContents(names) {
+    var c = window.contents
+    if (!c.rows.length || c.view !== window.view || c.query !== window.query) return { rows: names, cut: names.length }
+    var cut = names.length
+    while (cut > 0 && names[cut - 1].loose) cut--
+    if (cut < names.length && cut > 0 && names[cut - 1].rowKind === "section") cut--
+    var section = [window.rowData({ id: "section:contents", title: "Contents" }, "section")].concat(c.rows.map(function(m) {
+      return window.rowData(Object.assign({ inContents: true }, m), "item")
+    }))
+    return { rows: names.slice(0, cut).concat(section), cut: cut }
+  }
+
+  // A file can show as a name row and as a Contents row, so a row is its id
+  // and its section.
+  function indexOfRow(list, keep) {
+    for (var i = 0; keep && i < list.length; i++) if (list[i].itemId === keep.id && list[i].inContents === keep.inContents) return i
+    return -1
+  }
+
+  Timer {
+    id: contentDelay
+    interval: 150
+    onTriggered: window.searchContents()
+  }
+
+  // A Contents section on screen or held, or a search still due when the
+  // launcher hides, counts as cancelled too; ContentSearch logs the run it
+  // stops.
+  function cancelContents() {
+    var dropped = window.contents.rows.length > 0 || !!window.contents.held || (contentDelay.running && !window.shown)
+    contentDelay.stop()
+    window.contents = { view: null, query: "", rows: [], held: null, revision: -1 }
+    var running = window.backend.cancelContents()
+    if (dropped && !running) window.backend.log("info", "", "content: cancelled")
+  }
+
+  function searchContents() {
+    var serial = window.searchSerial
+    window.backend.searchContents({ query: window.query, serial: serial, forced: window.contentsForced }, function(reply) {
+      window.applyContents(reply)
+    })
+  }
+
+  // ContentSearch delivers only its pending request, which every cancel
+  // replaces, so the serial check is a second layer. A held reply goes in
+  // without the files the list dropped while it waited. The selection stays
+  // on its row when the row stays.
+  function applyContents(reply) {
+    if (reply.serial !== window.searchSerial) return
+    if (window.layerOpen) { window.contents.held = reply; return }
+    window.contents.revision = reply.revision
+    var listed = window.backend.listedFiles(reply.rows)
+    if (!listed.length) return
+    var keep = window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents, auto: window.selectionAuto } : null
+    window.contents.rows = listed
+    var shown = window.withContents(window.nameRows)
+    Rows.update(rows, shown.rows)
+    var at = window.indexOfRow(shown.rows, keep)
+    if (at >= 0) window.select(at, keep.auto)
+    else window.select(window.afterCut(shown.cut, keep), true)
+    window.contentsShownAt = Date.now()
+  }
+
+  // Where the selection goes when the section replaced its row or the row
+  // left the section: the last name row above the section. With none above,
+  // a row the user chose leaves nothing selected, and a row the launcher
+  // chose, or no row, gives way to the first Contents row.
+  function afterCut(cut, keep) {
+    var above = window.nextSelectable(cut, -1)
+    return above >= 0 || (keep && !keep.auto) ? above : window.nextSelectable(cut, 1)
+  }
+
+  function applyHeld() {
+    var reply = window.contents.held
+    if (!reply || window.layerOpen) return
+    window.contents.held = null
+    window.applyContents(reply)
+  }
+
+  // With "logLevel": "debug", the time from the last keystroke's rebuild to
+  // the first frame that shows the Contents section.
+  Connections {
+    target: window.contentsShownAt > 0 ? card.Window.window : null
+    function onFrameSwapped() {
+      window.backend.log("debug", "search", "contents painted " + (Date.now() - window.rebuiltAt) + " ms after the keystroke")
+      window.contentsShownAt = 0
+    }
   }
 
   function rowData(c, kind) {
@@ -241,6 +382,7 @@ PanelWindow {
       itemId: String(c.id || ""),
       title: String(c.title || ""),
       subtitle: String(c.subtitle || ""),
+      where: String(c.where !== undefined ? c.where : c.subtitle || ""),
       glyph: String(c.glyph || ""),
       glyphFont: String(c.glyphFont || ""),
       iconName: String(c.iconName || ""),
@@ -249,6 +391,8 @@ PanelWindow {
       checked: !!c.checked,
       disabled: !!c.disabled,
       favorite: typeof c.favoriteOrder === "number",
+      loose: !!c.loose,
+      inContents: !!c.inContents,
       calcInput: String(c.calcInput || ""),
       calcResult: String(c.calcResult || ""),
       calcInputCaption: String(c.calcInputCaption || ""),
@@ -268,7 +412,8 @@ PanelWindow {
     return -1
   }
 
-  function select(index) {
+  function select(index, auto) {
+    window.selectionAuto = !!auto
     if (index !== window.selectedIndex) {
       var previous = list.itemAtIndex(window.selectedIndex)
       if (previous) previous.selected = false
@@ -445,17 +590,24 @@ PanelWindow {
   }
 
   function toggleDropdown() {
-    if (window.dropdownOpen || !window.atRoot) { window.dropdownOpen = false; return }
+    if (window.dropdownOpen || !window.filters.length) { window.dropdownOpen = false; return }
     window.dropdownOpen = true
     dropdown.item.filter = ""
-    var at = RootSearch.FILTERS.map(function(f) { return f.id }).indexOf(window.rootFilter)
+    var at = window.filters.map(function(f) { return f.id }).indexOf(window.filterId)
     dropdown.item.selectedIndex = Math.max(0, at)
   }
 
-  function setRootFilter(id) {
+  // The root keeps its filter on the window; a pushed view keeps its own, so
+  // a new Search Files view starts on Names.
+  function setFilter(id) {
     window.dropdownOpen = false
-    if (window.rootFilter === id) return
-    window.rootFilter = id
+    if (window.filterId === id) return
+    if (window.atRoot) window.rootFilter = id
+    else {
+      var next = window.stack.slice()
+      next[next.length - 1] = Object.assign({}, window.view, { filter: id })
+      window.stack = next
+    }
     window.rebuild(true)
   }
 
@@ -914,7 +1066,7 @@ PanelWindow {
 
       Rectangle {
         id: filterButton
-        visible: window.atRoot && !window.compact
+        visible: window.filters.length > 0 && !window.compact
         anchors.right: parent.right
         anchors.rightMargin: window.px(16)
         anchors.verticalCenter: parent.verticalCenter
@@ -933,9 +1085,9 @@ PanelWindow {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: (RootSearch.FILTERS.filter(function(f) { return f.id === window.rootFilter })[0] || RootSearch.FILTERS[0]).title
+            text: (window.filters.filter(function(f) { return f.id === window.filterId })[0] || window.filters[0] || { title: "" }).title
             color: window.look.foreground
-            opacity: window.rootFilter === "all" ? 0.7 : 1
+            opacity: window.filters.length && window.filterId !== window.filters[0].id ? 1 : 0.7
             font.family: window.look.fontFamily
             font.pixelSize: Math.round(Style.font.bodySmall * window.zoom)
           }
@@ -1022,7 +1174,7 @@ PanelWindow {
         color: window.quickLook ? window.look.background : "transparent"
         preview: window.preview
         title: window.selectedRow ? window.selectedRow.title : ""
-        subtitle: window.selectedRow ? window.selectedRow.subtitle : ""
+        subtitle: window.selectedRow ? window.selectedRow.where : ""
         look: window.look
         zoom: window.zoom
         onReady: function(kind) { window.previewReady(kind) }
@@ -1053,6 +1205,8 @@ PanelWindow {
           textFormat: Text.PlainText
           text: window.view.kind === "alias" ? window.view.title
             : window.view.kind === "calculator-history" && !window.query ? "No Calculations Yet"
+            : window.contentsComing ? "Searching Contents…"
+            : window.contentsForced && window.query.trim().length < window.backend.contentMinChars ? "Search Contents"
             : window.view.kind === "files" && !window.query ? "No Recent Files"
             : (window.backend.ready ? "No results" : "Loading…")
           color: window.look.foreground
@@ -1064,6 +1218,8 @@ PanelWindow {
           textFormat: Text.PlainText
           text: window.view.kind === "alias" ? "Typing the alias exactly in the root search puts this command on top. Leave it empty to remove it."
             : window.view.kind === "calculator-history" && !window.query ? "Type a calculation in the root search, then copy or paste the answer."
+            : window.contentsComing ? ""
+            : window.contentsForced && window.query.trim().length < window.backend.contentMinChars ? "Type " + window.backend.contentMinChars + " or more characters to search inside files."
             : window.view.kind === "files" && !window.query ? "Type part of a file name. Files you open show up here." : ""
           visible: text.length > 0
           color: window.look.foreground
@@ -1214,12 +1370,12 @@ PanelWindow {
       anchors.topMargin: window.px(4)
       sourceComponent: ActionPanel {
         placeholder: "Filter…"
-        actions: RootSearch.FILTERS.map(function(f) {
-          return { id: f.id, title: f.title, shortcut: "", section: "filter", icon: f.id === window.rootFilter ? "✓" : " " }
+        actions: window.filters.map(function(f) {
+          return { id: f.id, title: f.title, shortcut: "", section: "filter", icon: f.id === window.filterId ? "✓" : " " }
         })
         look: window.look
         zoom: window.zoom
-        onActivated: function(id) { window.setRootFilter(id) }
+        onActivated: function(id) { window.setFilter(id) }
       }
     }
 
