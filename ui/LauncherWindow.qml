@@ -78,6 +78,18 @@ PanelWindow {
   property bool aboutOpen: false
   property var aboutRows: []
   property var alert: null
+  property var picker: null
+
+  // The Search Files pane loads once the selection has been still for 80 ms
+  // [I], so arrowing through rows reads no file it passes. previewSerial
+  // drops a load that lands for a row no longer selected.
+  readonly property bool filesView: window.view.kind === "files"
+  property var preview: null
+  property string previewFor: ""
+  property int previewSerial: 0
+  property double previewStartedAt: 0
+  property bool previewLogged: false
+  property bool quickLook: false
 
   // Inline argument pills for the selected command: argFocus -1 is the
   // search field, 0.. an argument.
@@ -120,6 +132,7 @@ PanelWindow {
     window.toastPanelOpen = false
     window.aboutOpen = false
     window.alert = null
+    window.picker = null
   }
 
   function prepare(payload) {
@@ -139,6 +152,7 @@ PanelWindow {
     window.backend.cancelSearch()
     window.searchPending = false
     window.closePopups()
+    window.clearPreview()
     window.toast = null
     toastTimer.stop()
     var seconds = Number(window.general.popToRootTimeout)
@@ -272,6 +286,56 @@ PanelWindow {
     if (index === window.nextSelectable(-1, 1)) list.positionViewAtBeginning()
   }
 
+  onSelectedRowChanged: window.schedulePreview()
+
+  function selectedFile() {
+    var id = window.filesView && window.selectedRow ? window.selectedRow.itemId : ""
+    return id.indexOf("file:") === 0 ? id.slice("file:".length) : ""
+  }
+
+  function schedulePreview() {
+    var path = window.selectedFile()
+    if (path && path === window.previewFor) return
+    window.previewSerial++
+    window.backend.cancelPreview()
+    window.previewFor = path
+    window.preview = null
+    if (!path) window.quickLook = false
+    if (path) previewDelay.restart()
+    else previewDelay.stop()
+  }
+
+  function clearPreview() {
+    previewDelay.stop()
+    window.previewSerial++
+    window.backend.cancelPreview()
+    window.previewFor = ""
+    window.preview = null
+    window.quickLook = false
+  }
+
+  Timer {
+    id: previewDelay
+    interval: 80
+    onTriggered: window.loadPreview()
+  }
+
+  function loadPreview() {
+    var serial = window.previewSerial
+    window.previewStartedAt = Date.now()
+    window.previewLogged = false
+    var r = window.backend.previewFile(window.previewFor, function(preview) {
+      if (serial === window.previewSerial) window.preview = preview
+    })
+    if (!r.ok) window.preview = { kind: "meta", path: window.previewFor }
+  }
+
+  function previewReady(kind) {
+    if (window.previewLogged || !window.preview) return
+    window.previewLogged = true
+    window.backend.log("info", "", "files: preview " + kind + " " + (Date.now() - window.previewStartedAt) + " ms")
+  }
+
   function move(delta) {
     pointerGate.reset()
     if (window.selectedIndex < 0) { window.select(window.nextSelectable(-1, 1)); return }
@@ -317,6 +381,7 @@ PanelWindow {
     if (index !== undefined && index >= 0) window.select(index)
     if (!window.selectedRow) return
     window.actionPanelOpen = false
+    if (actionId === "quick-look") { window.quickLook = !!window.previewFor; return }
     // ↵ on a command with an empty required argument focuses that pill.
     if (actionId === "open" && window.argDefs.length) {
       var missing = RootSearch.missingArgument(window.argDefs, window.argValues)
@@ -330,6 +395,7 @@ PanelWindow {
     if (!r.ok) { window.showToast("failure", r.error); return }
     var outcome = r.data || {}
     if (outcome.confirm) { window.alert = { spec: outcome.confirm, payload: payload }; return }
+    if (outcome.pick) { window.picker = { spec: outcome.pick, payload: payload }; if (pickerPanel.item) pickerPanel.item.filter = ""; return }
     if (outcome.push) { window.push(outcome.push); return }
     if (outcome.close) {
       if (outcome.hud) window.hud(outcome.hud)
@@ -341,6 +407,12 @@ PanelWindow {
     }
     if (outcome.toast) window.showToast(outcome.toast.style, outcome.toast.title, outcome.toast.actions)
     window.rebuild(false)
+  }
+
+  function pick(optionId) {
+    var payload = Object.assign({}, window.picker.payload, { option: optionId })
+    window.picker = null
+    window.request(payload)
   }
 
   function confirmAlert() {
@@ -519,6 +591,8 @@ PanelWindow {
 
   function handleEscape(shift) {
     if (window.alert) { window.alert = null; return }
+    if (window.picker) { window.picker = null; return }
+    if (window.quickLook) { window.quickLook = false; return }
     if (window.aboutOpen) { window.aboutOpen = false; return }
     if (window.dropdownOpen) { window.dropdownOpen = false; return }
     if (window.toastPanelOpen) { window.toggleToastPanel(); return }
@@ -585,6 +659,7 @@ PanelWindow {
       return true
     }
 
+    if (window.picker) return window.handlePopupKey(event, pickerPanel.item, ctrl, alt)
     if (window.aboutOpen) {
       if (ctrl && shift && key === Qt.Key_K) window.aboutOpen = false
       return true
@@ -610,6 +685,11 @@ PanelWindow {
       if (window.isActionPanelKey(ctrl, alt, shift, key)) { window.toggleActionPanel(); return true }
       if (ctrl && !shift && key === Qt.Key_P) { window.toggleDropdown(); return true }
       if (ctrl && !shift && key === Qt.Key_T) { window.toggleToastPanel(); return true }
+      if (ctrl && !shift && key === Qt.Key_Y) {
+        if (window.quickLook) window.quickLook = false
+        else window.performIfOffered(["quick-look"])
+        return true
+      }
       // Shift+Enter opens a new window for apps; Enter focuses an open one.
       if (enter && shift && !ctrl && !alt && window.performIfOffered(["open-new"])) return true
       if (enter && ctrl && shift) { window.performNth(2); return true }
@@ -633,9 +713,9 @@ PanelWindow {
       if (key === Qt.Key_PageUp) { window.move(-8); return true }
       if (key === Qt.Key_PageDown) { window.move(8); return true }
       if (ctrl && shift && key === Qt.Key_F) { window.performIfOffered(["favorite-add", "favorite-remove"]); return true }
-      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-command", "copy-id", "copy-question-answer"]); return true }
+      if (ctrl && shift && key === Qt.Key_C) { window.performIfOffered(["copy-command", "copy-id", "copy-question-answer", "copy-path"]); return true }
       if (ctrl && shift && key === Qt.Key_D) { window.performIfOffered(["delete-all-entries"]); return true }
-      if (ctrl && key === Qt.Key_D) { window.performIfOffered(["delete-entry"]); return true }
+      if (ctrl && key === Qt.Key_D) { window.performIfOffered(["delete-entry", "trash"]); return true }
       if (alt && shift && key === Qt.Key_D) { window.performIfOffered(["disable"]); return true }
       if (ctrl && key >= Qt.Key_1 && key <= Qt.Key_9) {
         var target = window.nthItem(key - Qt.Key_0)
@@ -663,6 +743,11 @@ PanelWindow {
     // search started here could be cancelled with nothing left to settle it.
     function onCalculatorRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert && window.query) window.rebuild(false) }
     function onFilesRevisionChanged() { if (window.shown && !window.actionPanelOpen && !window.alert && window.view.kind === "files") window.rebuild(false) }
+    function onNotification(method, data) {
+      if (method !== "files.trashed" || !window.shown) return
+      if (data.ok) window.showToast("success", "Moved " + data.name + " to the Trash")
+      else window.showToast("failure", "Could not move " + data.name + " to the Trash")
+    }
   }
 
 
@@ -887,9 +972,12 @@ PanelWindow {
 
       ListView {
         id: list
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         anchors.topMargin: window.px(4)
         anchors.bottomMargin: window.px(4)
+        width: window.filesView ? Math.round(parent.width * 0.42) : parent.width
         visible: window.view.kind !== "alias"
         clip: true
         model: rows
@@ -905,6 +993,39 @@ PanelWindow {
           zoom: window.zoom
           onHovered: function(i, item, mouse) { if (!window.actionPanelOpen && pointerGate.moved(item, mouse)) window.select(i) }
           onClicked: function(i) { window.perform("open", i) }
+        }
+      }
+
+      Rectangle {
+        visible: window.filesView && !window.quickLook
+        x: list.width + window.px(4)
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: Style.spacing.hairline
+        color: Util.alpha(window.look.foreground, 0.12)
+      }
+
+      FilePreview {
+        id: filePreview
+        visible: window.filesView && !!window.previewFor
+        z: 1
+        x: window.quickLook ? 0 : list.width + window.px(8)
+        width: parent.width - x
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        color: window.quickLook ? window.look.background : "transparent"
+        preview: window.preview
+        title: window.selectedRow ? window.selectedRow.title : ""
+        subtitle: window.selectedRow ? window.selectedRow.subtitle : ""
+        look: window.look
+        zoom: window.zoom
+        onReady: function(kind) { window.previewReady(kind) }
+
+        MouseArea {
+          anchors.fill: parent
+          enabled: window.quickLook
+          hoverEnabled: true
+          onClicked: keyCatcher.forceActiveFocus()
         }
       }
 
@@ -1128,6 +1249,23 @@ PanelWindow {
         rows: window.aboutRows
         look: window.look
         zoom: window.zoom
+      }
+    }
+
+    Loader {
+      id: pickerPanel
+      active: !!window.picker
+      z: 10
+      anchors.right: parent.right
+      anchors.rightMargin: card.borderRight + window.px(10)
+      anchors.bottom: footer.top
+      anchors.bottomMargin: window.px(6)
+      sourceComponent: ActionPanel {
+        placeholder: window.picker ? window.picker.spec.placeholder : ""
+        actions: window.picker ? window.picker.spec.options : []
+        look: window.look
+        zoom: window.zoom
+        onActivated: function(id) { window.pick(id) }
       }
     }
 
