@@ -79,7 +79,8 @@ function band(query, row, home) {
 // an active git repo, plus ln(1 + opens / 100) for every omacast open below
 // it. probeText is FileLister's signal probe output: zoxide's "score path"
 // lines and "<repo>/.git/logs/HEAD" lines. opens maps absolute paths to
-// their frecency score.
+// their frecency score, which bottoms out at 1 once every open has decayed,
+// so 1 counts as no usage, as it does in root search.
 function signals(probeText, opens, home, nowMs) {
   var dirWeight = Object.create(null)
   function add(dir, weight) { dirWeight[dir] = (dirWeight[dir] || 0) + weight }
@@ -89,8 +90,10 @@ function signals(probeText, opens, home, nowMs) {
     if (zoxide) add(zoxide[2], Number(zoxide[1]) || 0)
     else if (/\/\.git\/logs\/HEAD$/.test(line)) add(line.slice(0, -"/.git/logs/HEAD".length), ACTIVE_PROJECT_WEIGHT)
   })
-  var opened = opens || {}
-  Object.keys(opened).forEach(function(path) {
+  var opened = Object.create(null)
+  Object.keys(opens || {}).forEach(function(path) {
+    if (!(opens[path] > 1)) return
+    opened[path] = opens[path]
     var weight = Math.log(1 + opened[path] / LIFT_OPENS)
     for (var d = path.slice(0, path.lastIndexOf("/")); d.length > home.length; d = d.slice(0, d.lastIndexOf("/"))) add(d, weight)
   })

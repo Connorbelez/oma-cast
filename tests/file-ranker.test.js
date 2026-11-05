@@ -87,6 +87,13 @@ test("the empty query lists files by usage alone", () => {
   assert.deepEqual(FileRanker.rank(rows, "", s, 4), recent, "prepare keeps the same rows for the empty query")
 })
 
+test("a file whose opens have all decayed counts as unopened", () => {
+  const path = HOME + "/Pictures/avatar.png"
+  const recentWith = (score) => FileRanker.rank(rows, "", FileRanker.signals(fixture.probe, { [path]: score }, HOME, fixture.nowMs)).rows.map((r) => r.path)
+  assert.equal(recentWith(101).includes(path), true)
+  assert.equal(recentWith(1).includes(path), false)
+})
+
 test("a limit keeps the best rows of the full order and the full hit count", () => {
   const counts = {}
   for (const query of ["", "readme", "s", "launch", "e", "sales readme"]) {
