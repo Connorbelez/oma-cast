@@ -412,10 +412,11 @@ PanelWindow {
     window.rebuild(false)
   }
 
+  // The pick goes to the row the picker opened on, as confirmAlert's does.
   function pick(optionId) {
-    var action = window.picker.payload.action
+    var payload = Object.assign({}, window.picker.payload, { option: optionId })
     window.picker = null
-    window.perform(action, undefined, optionId)
+    window.request(payload)
   }
 
   function confirmAlert() {
@@ -557,7 +558,8 @@ PanelWindow {
     var text = clipboardInput.text.replace(/[\r\n\u2028\u2029]+/g, " ")
     clipboardInput.clear()
     if (!text) return
-    if (window.actionPanelOpen) actionPanel.item.filter += text
+    if (window.picker) pickerPanel.item.filter += text
+    else if (window.actionPanelOpen) actionPanel.item.filter += text
     else if (window.argFocus >= 0) {
       var name = window.argDefs[window.argFocus].name
       var values = Object.assign({}, window.argValues)
@@ -994,7 +996,7 @@ PanelWindow {
           look: window.look
           appLibrary: window.appLibrary
           zoom: window.zoom
-          onHovered: function(i, item, mouse) { if (!window.actionPanelOpen && pointerGate.moved(item, mouse)) window.select(i) }
+          onHovered: function(i, item, mouse) { if (!window.actionPanelOpen && !window.picker && pointerGate.moved(item, mouse)) window.select(i) }
           onClicked: function(i) { window.perform("open", i) }
         }
       }

@@ -109,7 +109,7 @@ function check() {
     for (const p of patterns) if (!p.test(text)) problems.push(`shape "${what}": ${file} no longer matches ${p}`)
   }
   const callers = (read(LW).match(/window\.request\(/g) || []).length
-  if (callers !== 2) problems.push(`shape "perform and confirmAlert are the only callers of request()": found ${callers} calls to window.request( in ${LW}, expected 2`)
+  if (callers !== 3) problems.push(`shape "perform, confirmAlert and pick are the only callers of request()": found ${callers} calls to window.request( in ${LW}, expected 3`)
   const writes = (read(LW).match(/window\.query = /g) || []).length
   if (writes !== 6) problems.push(`shape "every query write is followed by rebuild()": found ${writes} "window.query = " in ${LW}, expected 6; check the new one rebuilds, then update this count`)
   return { guards, problems }
