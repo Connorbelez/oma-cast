@@ -413,9 +413,12 @@ function nameHits(rows, query) {
   return q ? countIn(joinedNames(rows).text, new RegExp(escapeRegExp(q) + "[^\\n]*", "gi")) : 0
 }
 
-function revealContent(query, hits, forced) {
+// Counting costs a scan of every listed name, so it runs only when the
+// length, the forced flag and the space leave the answer open.
+function revealContent(query, rows, forced) {
   var q = String(query || "").trim()
-  return q.length >= CONTENT_MIN_CHARS && (!!forced || /\s/.test(q) || hits < CONTENT_NAME_HITS)
+  if (q.length < CONTENT_MIN_CHARS) return false
+  return !!forced || /\s/.test(q) || nameHits(rows, q) < CONTENT_NAME_HITS
 }
 
 // The list pane shows about 30 characters of a subtitle, so a match far

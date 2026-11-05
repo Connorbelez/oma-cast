@@ -23,7 +23,7 @@ const rows = [
 function revealsAt(query) {
   for (let i = 1; i <= query.length; i++) {
     const prefix = query.slice(0, i)
-    if (FileRanker.revealContent(prefix, FileRanker.nameHits(rows, prefix), false)) return prefix
+    if (FileRanker.revealContent(prefix, rows, false)) return prefix
   }
   return null
 }
@@ -36,11 +36,18 @@ test("content rows reveal at frec, on the space in zoxide q, and never for copyr
   assert.deepEqual(["fre", "frec", "zoxide", "zoxide q", "copyright"].map((q) => FileRanker.nameHits(rows, q)), [7, 2, 5, 0, 63])
 })
 
+const named = (name, n) => Array.from({ length: n }, (_, i) => row(`Dev/d${i}/${name}`))
+
 test("the Contents dropdown forces content rows from three characters on", () => {
-  assert.deepEqual(["co", "cop", "copyright", "  co  ", " frec "].map((q) => FileRanker.revealContent(q, 63, true)), [false, true, true, false, true])
-  assert.equal(FileRanker.revealContent("fr", 0, false), false)
-  assert.equal(FileRanker.revealContent("fre", 4, false), true)
-  assert.equal(FileRanker.revealContent("fre", 5, false), false)
+  assert.deepEqual(["co", "cop", "copyright", "  co  ", " frec "].map((q) => FileRanker.revealContent(q, rows, true)), [false, true, true, false, true])
+  assert.equal(FileRanker.revealContent("fr", named("fr.md", 0), false), false)
+  assert.equal(FileRanker.revealContent("fre", named("fresh.md", 4), false), true)
+  assert.equal(FileRanker.revealContent("fre", named("fresh.md", 5), false), false)
+})
+
+test("the reveal rule counts names only when the length, the dropdown and the space leave it open", () => {
+  assert.deepEqual([["fr", false], ["zoxide q", false], ["copyright", true]].map(([q, forced]) => FileRanker.revealContent(q, null, forced)), [false, true, true])
+  assert.throws(() => FileRanker.revealContent("frec", null, false), TypeError)
 })
 
 const match = (file, text, line, sub) => JSON.stringify({ type: "match", data: {

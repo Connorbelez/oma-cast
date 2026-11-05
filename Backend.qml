@@ -377,7 +377,7 @@ Item {
   // query. Returns false when the reveal rule keeps contents hidden.
   function searchContents(data, callback) {
     var query = String(data && data.query || "").trim()
-    if (!FileRanker.revealContent(query, FileRanker.nameHits(fileLister.rows, query), !!(data && data.forced))) return false
+    if (!FileRanker.revealContent(query, fileLister.rows, !!(data && data.forced))) return false
     contentSearch.search({ serial: data.serial, query: query, roots: fileLister.defaultRoots }, function(reply) {
       var rows = FileRanker.contentRows(reply.matches, backend.fileSignals(), fileLister.rows).map(backend.contentHit)
       callback({ serial: reply.serial, rows: rows, ms: reply.ms, killed: reply.killed })
