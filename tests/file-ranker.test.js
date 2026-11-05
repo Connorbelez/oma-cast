@@ -63,6 +63,15 @@ test("sales readme keeps the name matches first and never matches a segment by s
   assert.equal(list.some((r) => r.path === HOME + "/wagertech/cmsv2/wagertech-cms-v2-migration/README.md"), false)
 })
 
+test("rank places every row in the band that band() gives it", () => {
+  const queries = fixture.queries.map((q) => q.query).concat(["s", "e", "sales", "oma s", "cms spec", "app", "x y"])
+  for (const query of queries) {
+    for (const r of ranked(query)) assert.equal(r.band, FileRanker.band(query, r, HOME), `${query}: ${short(r)}`)
+    const all = rows.filter((r) => FileRanker.band(query, r, HOME) >= 0).length
+    assert.equal(FileRanker.rank(rows, query, signals()).hits, all, query)
+  }
+})
+
 test("band names each kind of match", () => {
   const cases = [
     ["spec", "Projects/oma-cast/SPEC.md", 0], ["spec.md", "Projects/oma-cast/SPEC.md", 0], ["spec", "Downloads/specs.md", 1],

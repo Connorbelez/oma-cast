@@ -34,10 +34,12 @@ function compile(query) {
       subsequence: new RegExp(subsequenceSource(word, ""), "i"),
       prefixLines: new RegExp("^" + e + "[^\\n]*", "gim"),
       wordStartLines: new RegExp("[-_. ]" + e + "[^\\n]*", "gi"),
+      startLines: new RegExp("(?:^|[-_. ])" + e + "[^\\n]*", "gim"),
       substringLines: new RegExp(e + "[^\\n]*", "gi"),
       lines: new RegExp(subsequenceSource(word, "\\n") + "[^\\n]*", "gi"),
       without: word.length === 1 ? new RegExp("^[^" + e + "\\n]+$", "gim") : null,
-      segment: new RegExp("(?:^|/)(?:[^/]*[-_. ])?" + e, "i")
+      segment: new RegExp("(?:^|/)(?:[^/]*[-_. ])?" + e, "i"),
+      segmentLines: new RegExp("(?:^|/)(?:[^/\\n]*[-_. ])?" + e + "[^\\n]*", "gim")
     }
   })
 }
@@ -127,7 +129,7 @@ function score(row, s) {
   return (opens ? Math.log(1 + opens / LIFT_OPENS) : 0) + 0.5 * recency(row, s) + 0.5 * prior(row.dir, s)
 }
 
-var joined = { rows: null, text: "", starts: [], byPath: null, sample: "", sampled: 0 }
+var joined = { rows: null, text: "", starts: [], byPath: null, sample: "", sampled: 0, dirs: null, dirList: [], folders: null }
 
 // Every name on its own line, built once per list. A native scan of this
 // text finds matching names several times faster in Qt's engine than one
@@ -136,16 +138,23 @@ function joinedNames(rows) {
   if (joined.rows === rows) return joined
   var starts = []
   var byPath = Object.create(null)
+  var dirs = Object.create(null)
+  var dirList = []
   var at = 0
   for (var r = 0; r < rows.length; r++) {
     starts.push(at)
     byPath[rows[r].path] = r
     at += rows[r].name.length + 1
+    if (!dirs[rows[r].dir]) {
+      dirs[rows[r].dir] = []
+      dirList.push(rows[r].dir)
+    }
+    dirs[rows[r].dir].push(r)
   }
   var sample = rows.filter(function(row, i) { return i % 16 === 0 })
   joined = {
     rows: rows, text: rows.map(function(row) { return row.name }).join("\n"), starts: starts, byPath: byPath,
-    sample: sample.map(function(row) { return row.name }).join("\n"), sampled: sample.length
+    sample: sample.map(function(row) { return row.name }).join("\n"), sampled: sample.length, dirs: dirs, dirList: dirList
   }
   return joined
 }
@@ -243,26 +252,66 @@ function rankWord(rows, listed, m, s, max) {
   return { hits: countRows(listed, m), rows: out }
 }
 
+// Band 2 needs every word to start a word in the name, so the longest word's
+// scan finds its candidates. Band 6 needs the other words in the folder, so
+// the folders are filtered first: scanning for a one-letter last word made
+// band() run on 14,000 names (25 to 33 ms for "oma s").
+// The folders relative to home, one per line, built once per list like the
+// names.
+function joinedFolders(listed, home) {
+  if (listed.folders && listed.folders.home === home) return listed.folders
+  var starts = []
+  var at = 0
+  var rel = listed.dirList.map(function(dir) {
+    var line = relativeDir(dir, home)
+    starts.push(at)
+    at += line.length + 1
+    return line
+  })
+  listed.folders = { home: home, text: rel.join("\n"), starts: starts, rel: rel }
+  return listed.folders
+}
+
+function wordStartsAll(words, name) {
+  for (var i = 0; i < words.length; i++) if (!words[i].wordStart.test(name)) return false
+  return true
+}
+
 function rankWords(rows, listed, words, s, max) {
   var buckets = [[], [], [], [], [], [], []]
+  var seen = new Uint8Array(rows.length)
   var count = 0
-  scanRows(listed, words[words.length - 1].lines, function(r) {
-    var matchBand = band(words, rows[r], s.home)
-    if (matchBand < 0) return
+  var longest = words.reduce(function(a, b) { return b.word.length > a.word.length ? b : a })
+  scanRows(listed, longest.startLines, function(r) {
+    if (!wordStartsAll(words, rows[r].name)) return
+    seen[r] = 1
     count++
-    var effective = liftedBand(matchBand, s.opens[rows[r].path] || 0)
-    buckets[effective].push(hit(rows[r], matchBand, score(rows[r], s)))
+    buckets[2].push(hit(rows[r], 2, score(rows[r], s)))
+  })
+  var last = words[words.length - 1]
+  var others = words.slice(1, -1)
+  var folders = joinedFolders(listed, s.home)
+  scanRows(folders, words[0].segmentLines, function(d) {
+    for (var i = 0; i < others.length; i++) if (!others[i].segment.test(folders.rel[d])) return
+    var inDir = listed.dirs[listed.dirList[d]]
+    for (var j = 0; j < inDir.length; j++) {
+      var r = inDir[j]
+      var nb = seen[r] ? -1 : nameBand(last, rows[r].name)
+      if (nb < 0 || nb > 2) continue
+      count++
+      buckets[liftedBand(6, s.opens[rows[r].path] || 0)].push(hit(rows[r], 6, score(rows[r], s)))
+    }
   })
   var out = []
   buckets.forEach(function(hits) { if (out.length < max) take(out, hits, max) })
   return { hits: count, rows: out }
 }
 
-// Builds the joined names, every listed folder's prior and the empty
-// query's rows, so the first keystroke after a new list or new signals pays
+// Builds the joined names and folders, every listed folder's prior and the
+// empty query's rows, so the first keystroke after a new list or new signals pays
 // for none of them (20 to 40 ms on the dev machine's 19,900 files).
 function prepare(rows, s, limit) {
-  joinedNames(rows)
+  joinedFolders(joinedNames(rows), s.home)
   recent(rows, s, limit)
 }
 
