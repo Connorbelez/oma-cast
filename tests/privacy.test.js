@@ -327,3 +327,12 @@ test("every process FileActions starts has fixed argv", () => {
   assert.doesNotMatch(source, /execDetached|command:(?!\s*\[)|\.command\s*=/)
   assert.match(source, /\n    command: \["timeout", "-k", "2", "10", "bash", "-c", actions\.previewScript, /)
 })
+
+// A script property that concatenates anything, such as the query, is no
+// longer the constant script FILE_ACTION_ARGS allows.
+test("every script FileActions runs is one string literal", () => {
+  const source = fs.readFileSync(path.join(root, "services/FileActions.qml"), "utf8")
+  const scripts = source.split("\n").filter((line) => /property string \w*[Ss]cript\b/.test(line))
+  assert.ok(scripts.length >= 1)
+  for (const line of scripts) assert.match(line, /^  readonly property string \w+: '(?:[^'\\]|\\.)*'$/, line.slice(0, 80))
+})
