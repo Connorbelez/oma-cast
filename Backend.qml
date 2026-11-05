@@ -213,7 +213,7 @@ Item {
 
   // A path that reaches rg's argv or the ignore file: absolute, so it cannot
   // read as a flag, one line, so it cannot add a second pattern, and
-  // normalised, so a prefix check against the home dir means what it says.
+  // normalised, so the trash's check that a path is under the home dir holds.
   function checkFilePath(value) {
     var path = String(value || "")
     if (path.charAt(0) !== "/" || /[\n\r\0]/.test(path)) throw new Error("Expected an absolute path, got " + JSON.stringify(path))

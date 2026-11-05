@@ -186,7 +186,6 @@ Item {
   property var trashQueue: []
   property var trashedPaths: []
 
-  // Queued, running, or gone to the Trash and not listed again since.
   function trashing(path, rows) {
     if (trashRun.path === path || actions.trashQueue.indexOf(path) >= 0) return true
     return actions.trashedPaths.indexOf(path) >= 0 && !rows.some(function(r) { return r.path === path })

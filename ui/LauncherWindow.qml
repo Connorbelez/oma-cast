@@ -412,7 +412,6 @@ PanelWindow {
     window.rebuild(false)
   }
 
-  // The pick goes to the row the picker opened on, as confirmAlert's does.
   function pick(optionId) {
     var payload = Object.assign({}, window.picker.payload, { option: optionId })
     window.picker = null
