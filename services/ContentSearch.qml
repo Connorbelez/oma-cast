@@ -27,7 +27,7 @@ Item {
   // 4,096 bytes can be split and mixed with the other root's lines, so each
   // root's own awk passes on only lines of at most 4,095 bytes plus the
   // newline, one write each. The bound is on rg's JSON line, so match text
-  // of about 3,800 characters is the real limit. Every awk flushes each line
+  // of about 3,880 ASCII characters (fewer for non-ASCII) is the real limit. Every awk flushes each line
   // it passes, so a kill keeps the lines printed before it. rg ignores
   // --max-columns under --json and one common word printed 16 MB in 38 ms,
   // so only these short lines reach the shell, for at most 300 files,
