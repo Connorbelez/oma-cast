@@ -319,7 +319,9 @@ Item {
 
   function fileAction(data) {
     var action = String(data.action || "open")
-    var path = fileActions.listedPath(String(data.id).slice("file:".length), fileLister.rows)
+    var id = String(data.id).slice("file:".length)
+    if (fileActions.trashing(id, fileLister.rows)) return {}
+    var path = fileActions.listedPath(id, fileLister.rows)
     var name = path.slice(path.lastIndexOf("/") + 1)
     switch (action) {
       case "open":

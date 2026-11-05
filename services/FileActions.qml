@@ -184,6 +184,13 @@ Item {
   }
 
   property var trashQueue: []
+  property var trashedPaths: []
+
+  // Queued, running, or gone to the Trash and not listed again since.
+  function trashing(path, rows) {
+    if (trashRun.path === path || actions.trashQueue.indexOf(path) >= 0) return true
+    return actions.trashedPaths.indexOf(path) >= 0 && !rows.some(function(r) { return r.path === path })
+  }
 
   function trash(path) {
     actions.trashQueue = actions.trashQueue.concat([path])
@@ -202,7 +209,10 @@ Item {
     property string path: ""
     command: ["gio", "trash", "--", trashRun.path]
     onExited: function(exitCode) {
-      actions.trashed(trashRun.path, exitCode === 0)
+      var path = trashRun.path
+      trashRun.path = ""
+      if (exitCode === 0) actions.trashedPaths = actions.trashedPaths.concat([path])
+      actions.trashed(path, exitCode === 0)
       actions.nextTrash()
     }
   }
