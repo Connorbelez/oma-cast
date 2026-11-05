@@ -597,11 +597,11 @@ PanelWindow {
   function handleEscape(shift) {
     if (window.alert) { window.alert = null; return }
     if (window.picker) { window.picker = null; return }
-    if (window.quickLook) { window.quickLook = false; return }
+    if (window.actionPanelOpen) { window.actionPanelOpen = false; return }
+    if (window.toastPanelOpen) { window.toggleToastPanel(); return }
     if (window.aboutOpen) { window.aboutOpen = false; return }
     if (window.dropdownOpen) { window.dropdownOpen = false; return }
-    if (window.toastPanelOpen) { window.toggleToastPanel(); return }
-    if (window.actionPanelOpen) { window.actionPanelOpen = false; return }
+    if (window.quickLook) { window.quickLook = false; return }
     if (window.argFocus >= 0 && !shift) { window.argFocus = -1; return }
     if (shift) { window.popToRoot(); return }
     if (window.general.escapeKeyBehavior === "close-and-pop-to-root") {
