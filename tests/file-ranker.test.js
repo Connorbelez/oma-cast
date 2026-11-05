@@ -15,10 +15,12 @@ const rankOf = (query, target) => ranked(query).findIndex((r) => r.path === targ
 const row = (p) => ({ path: HOME + "/" + p, name: p.slice(p.lastIndexOf("/") + 1), dir: HOME + "/" + p.slice(0, p.lastIndexOf("/")) })
 
 // The prototype's bounded-lift column (docs/phase7-prototypes/README.md),
-// except readme: its target came second there on file mtimes, which P7-1's
-// rows do not carry.
+// except claude and readme. The prototype took the raw zoxide score, which
+// gave oma-cast's 2.0 a weight of 2; ln(1 + 2) is 1.1, so the folders holding
+// the fixture's two-open package.json and fifty-open SpectrumCycling.ui now
+// lift their CLAUDE.md and README.md above oma-cast's.
 const EXPECTED_RANKS = {
-  "spec": 1, "oma spec": 1, "claude": 1, "readme": 1, "launcher": 1, "rootsearch": 1, "package json": 1,
+  "spec": 1, "oma spec": 1, "claude": 2, "readme": 3, "launcher": 1, "rootsearch": 1, "package json": 1,
   "package": 1, "skill": 1, "sales readme": 5, "app tsx": 1, "launch": 1, "cms users": 1
 }
 
@@ -133,11 +135,20 @@ test("a limit keeps the best rows of the full order and the full hit count", () 
   assert.deepEqual(counts, { "": 164, readme: 13, s: 87, launch: 8, e: 182, "sales readme": 6 })
 })
 
+test("a busy zoxide folder never outranks files opened from omacast", () => {
+  const files = ["Work/a.txt", "Work/b.txt", "Work/c.txt", "Work/d.txt", "Work/README.md", "Downloads/invoice.pdf", "Downloads/README.md"].map(row)
+  const busy = "  40.0 /home/u/Work\n"
+  const invoice = FileRanker.signals(busy, { [HOME + "/Downloads/invoice.pdf"]: 201 }, HOME, fixture.nowMs)
+  assert.deepEqual(FileRanker.rank(files, "", invoice, 4).rows.map(short), ["Downloads/invoice.pdf", "Work/a.txt", "Work/b.txt", "Work/c.txt"])
+  const readme = FileRanker.signals(busy, { [HOME + "/Downloads/README.md"]: 5000 }, HOME, fixture.nowMs)
+  assert.deepEqual(FileRanker.rank(files, "readme", readme).rows.map(short), ["Downloads/README.md", "Work/README.md"])
+})
+
 test("the prior comes from the nearest weighted folder and decays with distance", () => {
   const s = signals()
-  assert.equal(FileRanker.usage(row("Projects/oma-cast/SPEC.md"), s).prior, 4)
-  assert.equal(FileRanker.usage(row("Projects/oma-cast/core/RootSearch.js"), s).prior.toFixed(4), "2.6667")
-  assert.equal(FileRanker.usage(row("Projects/oma-cast/docs/phase7-prototypes/rank.js"), s).prior, 2)
+  assert.equal(FileRanker.usage(row("Projects/oma-cast/SPEC.md"), s).prior.toFixed(4), "3.0986")
+  assert.equal(FileRanker.usage(row("Projects/oma-cast/core/RootSearch.js"), s).prior.toFixed(4), "2.0657")
+  assert.equal(FileRanker.usage(row("Projects/oma-cast/docs/phase7-prototypes/rank.js"), s).prior.toFixed(4), "1.5493")
   assert.equal(FileRanker.usage(row("Pictures/avatar.png"), s).prior, 0)
 })
 

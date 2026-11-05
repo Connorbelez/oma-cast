@@ -79,9 +79,10 @@ function band(query, row, home) {
   return 6
 }
 
-// The folder prior: each directory's weight is its zoxide score, plus 2 for
-// an active git repo, plus ln(1 + opens / 100) for every omacast open below
-// it. probeText is FileLister's signal probe output: zoxide's "score path"
+// The folder prior: each directory's weight is ln(1 + its zoxide score),
+// plus 2 for an active git repo, plus ln(1 + opens / 100) for every omacast
+// open below it. zoxide scores reach the hundreds, and taken raw a 40-point
+// folder outranked a fifty-times-opened file. probeText is FileLister's signal probe output: zoxide's "score path"
 // lines and "<repo>/.git/logs/HEAD" lines. opens maps absolute paths to
 // their frecency score, which bottoms out at 1 once every open has decayed,
 // so 1 counts as no usage, as it does in root search.
@@ -91,7 +92,7 @@ function signals(probeText, opens, home, nowMs) {
   String(probeText || "").split("\n").forEach(function(raw) {
     var line = raw.trim()
     var zoxide = /^([0-9.]+)\s+(\/.*)$/.exec(line)
-    if (zoxide) add(zoxide[2], Number(zoxide[1]) || 0)
+    if (zoxide) add(zoxide[2], Math.log(1 + (Number(zoxide[1]) || 0)))
     else if (/\/\.git\/logs\/HEAD$/.test(line)) add(line.slice(0, -"/.git/logs/HEAD".length), ACTIVE_PROJECT_WEIGHT)
   })
   var opened = Object.create(null)
@@ -359,13 +360,16 @@ function cutFor(values, k) {
   return heap.length === k ? heap[0] : 0
 }
 
-// The empty query ranks by usage alone. Its rows depend only on the list and
-// the signals, so they are kept on the signals object.
+// The empty query ranks by usage alone, files opened from omacast first: a
+// folder's zoxide score has no ceiling, so in one blend the untouched files
+// of a busy folder outranked a file opened twice. Its rows depend only on
+// the list and the signals, so they are kept on the signals object.
 function recent(rows, s, limit) {
   var max = limit > 0 ? limit : Infinity
   var cached = s.recent
   if (cached && cached.rows === rows && cached.max === max) return cached.result
   var values = new Float64Array(rows.length)
+  var opened = bucket()
   var hits = 0
   var dir = null
   var dirPrior = 0
@@ -376,14 +380,17 @@ function recent(rows, s, limit) {
       dirPrior = prior(dir, s)
     }
     var opens = s.opens[row.path]
-    values[r] = (opens ? Math.log(1 + opens / OPEN_SCALE) : 0) + 0.5 * recency(row, s) + 0.5 * dirPrior
-    if (values[r] > 0) hits++
+    var value = (opens ? Math.log(1 + opens / OPEN_SCALE) : 0) + 0.5 * recency(row, s) + 0.5 * dirPrior
+    if (opens) add(opened, r, -1, value)
+    else values[r] = value
+    if (value > 0) hits++
   }
-  var cut = hits > max ? cutFor(values, max) : 0
-  var best = bucket()
-  for (var i = 0; i < rows.length; i++) if (values[i] > 0 && values[i] >= cut) add(best, i, -1, values[i])
+  var cut = hits - opened.at.length > max ? cutFor(values, max) : 0
+  var rest = bucket()
+  for (var i = 0; i < rows.length; i++) if (values[i] > 0 && values[i] >= cut) add(rest, i, -1, values[i])
   var out = []
-  take(out, rows, best, max)
+  take(out, rows, opened, max)
+  take(out, rows, rest, max)
   s.recent = { rows: rows, max: max, result: { hits: hits, rows: out } }
   return s.recent.result
 }
