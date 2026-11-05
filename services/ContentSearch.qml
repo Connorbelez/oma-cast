@@ -20,11 +20,14 @@ Item {
   signal message(string level, string text)
 
   // rg searches every file, private paths included, when an --ignore-file is
-  // missing, and an empty pattern matches every line, so both exit first. rg
-  // ignores --max-columns under --json and one common word printed 16 MB in
-  // 38 ms, so only match lines of at most 4,096 characters reach the shell,
-  // for at most 1,000 files.
-  readonly property string searchScript: '[[ -f $3 && -r $3 && -f $4 && -r $4 ]] || exit 3; IFS= read -r q && [[ $q ]] || exit 2; { printf "%s\\n" "$q" | rg --json -F -i -f - --max-count 1 --max-filesize 1M --ignore-file "$3" --ignore-file "$4" "$1"; printf "%s\\n" "$q" | rg --json -F -i -f - --max-count 1 --max-filesize 1M --hidden --ignore-file "$3" --ignore-file "$4" "$2"; } | awk \'length($0) <= 4096 && /^\\{"type":"match"/\' | head -n 1000'
+  // missing, and an empty pattern matches every line, so both exit first. The
+  // roots run at the same time and cat keeps their lines apart. Cold reads
+  // bound the run, and rg's default thread count left the home dir at 203 to
+  // 219 ms cold against 140 at -j 24 and 111 at -j 48. rg ignores
+  // --max-columns under --json and one common word printed 16 MB in 38 ms, so
+  // only match lines of at most 4,096 characters reach the shell, for at most
+  // 1,000 files.
+  readonly property string searchScript: '[[ -f $3 && -r $3 && -f $4 && -r $4 ]] || exit 3; IFS= read -r q && [[ $q ]] || exit 2; cat <(printf "%s\\n" "$q" | rg --json -F -i -f - --max-count 1 --max-filesize 1M -j 32 --ignore-file "$3" --ignore-file "$4" "$1") <(printf "%s\\n" "$q" | rg --json -F -i -f - --max-count 1 --max-filesize 1M -j 32 --hidden --ignore-file "$3" --ignore-file "$4" "$2") | awk \'length($0) <= 4096 && /^\\{"type":"match"/\' | head -n 1000'
 
   function search(request, callback) {
     service.cancel()

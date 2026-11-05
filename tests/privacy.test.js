@@ -403,9 +403,9 @@ test("the content script gives rg the query on stdin only and passes on short ma
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.stdout, '{"type":"match","data":{"path":{"text":"/home/u/a.md"}}}\n{"type":"match","data":{"path":{"text":"/home/u/.config/a.md"}}}\n')
   const log = home + "/cmdlines"
-  assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n").map((l) => l.trim().replace(/^\/bin\/bash \S+\/rg /, "rg ")), [
-    `rg --json -F -i -f - --max-count 1 --max-filesize 1M --ignore-file ${ignore} --ignore-file ${untouched} /home/u`,
-    `rg --json -F -i -f - --max-count 1 --max-filesize 1M --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`
+  assert.deepEqual(fs.readFileSync(log, "utf8").trim().split("\n").map((l) => l.trim().replace(/^\/bin\/bash \S+\/rg /, "rg ")).sort(), [
+    `rg --json -F -i -f - --max-count 1 --max-filesize 1M -j 32 --hidden --ignore-file ${ignore} --ignore-file ${untouched} /home/u/.config`,
+    `rg --json -F -i -f - --max-count 1 --max-filesize 1M -j 32 --ignore-file ${ignore} --ignore-file ${untouched} /home/u`
   ])
   assert.equal(fs.readFileSync(log + ".stdin", "utf8"), "my secret query\nmy secret query\n")
   const parents = fs.readFileSync(log + ".parents", "utf8")
