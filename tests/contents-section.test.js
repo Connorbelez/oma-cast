@@ -74,6 +74,75 @@ function launcher(files) {
   }
 }
 
+test("a kept rebuild leaves out the Contents rows whose files left the list", () => {
+  const v = launcher(["/h/a", "/h/x", "/h/y"])
+  v.backend.names = [{ path: "/h/a" }]
+  v.type("q")
+  v.fire()
+  v.reply(["/h/a", "/h/x", "/h/y"])
+  assert.equal(v.state(), "rows=#files /h/a #contents /h/a* /h/x* /h/y* sel=/h/a")
+  v.choose("/h/x*")
+  v.drop("/h/x")
+  assert.equal(v.state(), "rows=#files /h/a #contents /h/a* /h/y* sel=/h/a")
+  v.choose("/h/y*")
+  v.drop("/h/a")
+  assert.equal(v.state(), "rows=#contents /h/y* sel=/h/y*")
+  assert.equal(v.timer.running, false)
+})
+
+test("a Contents row the user chose leaves for no selection when no name row is above, and an automatic one for the next Contents row", () => {
+  const v = launcher(["/h/x", "/h/y", "/h/z"])
+  v.type("q")
+  v.fire()
+  v.reply(["/h/x", "/h/y", "/h/z"])
+  assert.equal(v.state(), "rows=#contents /h/x* /h/y* /h/z* sel=/h/x*")
+  v.drop("/h/x")
+  assert.equal(v.state(), "rows=#contents /h/y* /h/z* sel=/h/y*")
+  v.choose("/h/z*")
+  v.drop("/h/z")
+  assert.equal(v.state(), "rows=#contents /h/y* sel=none")
+})
+
+test("a section that a list change leaves empty searches again for the same query", () => {
+  const v = launcher(["/h/x"])
+  v.type("q")
+  v.fire()
+  v.reply(["/h/x"])
+  const serial = v.window.searchSerial
+  v.drop("/h/x")
+  assert.equal(v.state(), "rows= sel=none")
+  assert.deepEqual([v.timer.running, v.window.searchSerial, v.window.contents.query], [true, serial + 1, "q"])
+  v.backend.list = v.backend.list.concat([{ path: "/h/new", name: "new", dir: "/h" }])
+  v.fire()
+  assert.equal(v.backend.content.query, "q")
+  v.reply(["/h/new"])
+  assert.equal(v.state(), "rows=#contents /h/new* sel=/h/new*")
+})
+
+test("an empty reply on an unchanged list is not searched again by a kept rebuild", () => {
+  const v = launcher(["/h/a"])
+  v.backend.names = [{ path: "/h/a" }]
+  v.type("q")
+  v.fire()
+  v.reply([])
+  v.window.rebuild(false)
+  assert.deepEqual([v.state(), v.timer.running], ["rows=#files /h/a sel=/h/a", false])
+})
+
+test("a reply held under a layer goes in without the files that left the list meanwhile", () => {
+  const v = launcher(["/h/a", "/h/x"])
+  v.backend.names = [{ path: "/h/a" }]
+  v.type("q")
+  v.fire()
+  v.window.layerOpen = true
+  v.reply(["/h/a", "/h/x"])
+  v.drop("/h/x")
+  assert.equal(v.state(), "rows=#files /h/a sel=/h/a")
+  v.window.layerOpen = false
+  v.window.applyHeld()
+  assert.equal(v.state(), "rows=#files /h/a #contents /h/a* sel=/h/a")
+})
+
 test("when every name row is loose, the automatic selection moves to the first Contents row and a chosen one to none", () => {
   const v = launcher(["/h/l1", "/h/l2", "/h/c1"])
   v.backend.names = [{ path: "/h/l1", loose: true }, { path: "/h/l2", loose: true }]

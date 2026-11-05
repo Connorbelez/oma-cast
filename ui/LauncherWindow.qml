@@ -105,10 +105,12 @@ PanelWindow {
   property double contentsShownAt: 0
   // The section belongs to the view and query it was searched for. A rebuild
   // for the same ones, such as a list refresh, keeps the search serial, the
-  // stillness timer, the search and the rows; a new query or view, a hide or
-  // a pop starts over. A reply that lands while a layer is open waits until
-  // the layer closes, so the selection never moves under it.
-  property var contents: ({ view: null, query: "", rows: [], held: null })
+  // stillness timer, the search and the rows of files still listed; a new
+  // query or view, a hide or a pop starts over. A reply that lands while a
+  // layer is open waits until the layer closes, so the selection never moves
+  // under it. revision is the filesRevision a reply was filtered at, -1
+  // before one lands.
+  property var contents: ({ view: null, query: "", rows: [], held: null, revision: -1 })
   property var nameRows: []
   readonly property bool layerOpen: window.actionPanelOpen || !!window.picker || !!window.alert || window.quickLook || window.aboutOpen
   onLayerOpenChanged: if (!window.layerOpen && window.contents.held) Qt.callLater(window.applyHeld)
@@ -217,7 +219,7 @@ PanelWindow {
 
 
   function rebuild(resetSelection, restoreIndex) {
-    var kept = window.contents.view === window.view && window.contents.query === window.query
+    var kept = window.keepsContents()
     var serial = kept ? window.searchSerial : ++window.searchSerial
     window.backend.cancelSearch()
     if (!kept) window.cancelContents()
@@ -229,7 +231,7 @@ PanelWindow {
     var revision = window.backend.candidatesRevision
     var startedAt = Date.now()
     if (window.filesView && !kept) {
-      window.contents = { view: window.view, query: window.query, rows: [], held: null }
+      window.contents = { view: window.view, query: window.query, rows: [], held: null, revision: -1 }
       window.rebuiltAt = startedAt
       contentDelay.restart()
     }
@@ -242,6 +244,17 @@ PanelWindow {
       window.searchPending = false
       window.backend.log("debug", "search", "rows in " + (Date.now() - startedAt) + " ms")
     })
+  }
+
+  // A rebuild for the record's own view and query keeps it, without the rows
+  // whose files left the list. When none is left and the list changed since
+  // the reply, the rebuild starts a new record, so files the new list holds
+  // can show.
+  function keepsContents() {
+    var c = window.contents
+    if (c.view !== window.view || c.query !== window.query) return false
+    c.rows = window.backend.listedFiles(c.rows)
+    return c.rows.length > 0 || c.revision < 0 || c.revision === window.backend.filesRevision
   }
 
   function applySearch(result, keep, restoreIndex) {
@@ -267,6 +280,7 @@ PanelWindow {
     var keepIndex = window.indexOfRow(shown.rows, keep)
     if (restoreIndex >= 0 && restoreIndex < rows.count && window.isSelectable(restoreIndex)) window.select(restoreIndex)
     else if (keepIndex >= 0) window.select(keepIndex, keep.auto)
+    else if (keep && keep.inContents) window.select(window.afterCut(shown.cut, keep), true)
     else window.select(window.nextSelectable(-1, 1), true)
   }
 
@@ -304,7 +318,7 @@ PanelWindow {
   function cancelContents() {
     var dropped = window.contents.rows.length > 0 || !!window.contents.held || (contentDelay.running && !window.shown)
     contentDelay.stop()
-    window.contents = { view: null, query: "", rows: [], held: null }
+    window.contents = { view: null, query: "", rows: [], held: null, revision: -1 }
     var running = window.backend.cancelContents()
     if (dropped && !running) window.backend.log("info", "", "content: cancelled")
   }
@@ -317,14 +331,17 @@ PanelWindow {
   }
 
   // ContentSearch delivers only its pending request, which every cancel
-  // replaces, so the serial check is a second layer. The selection stays on
-  // its row when the row stays.
+  // replaces, so the serial check is a second layer. A held reply goes in
+  // without the files the list dropped while it waited. The selection stays
+  // on its row when the row stays.
   function applyContents(reply) {
     if (reply.serial !== window.searchSerial) return
     if (window.layerOpen) { window.contents.held = reply; return }
-    if (!reply.rows.length) return
+    window.contents.revision = reply.revision
+    var listed = window.backend.listedFiles(reply.rows)
+    if (!listed.length) return
     var keep = window.selectedRow ? { id: window.selectedRow.itemId, inContents: window.selectedRow.inContents, auto: window.selectionAuto } : null
-    window.contents.rows = reply.rows
+    window.contents.rows = listed
     var shown = window.withContents(window.nameRows)
     Rows.update(rows, shown.rows)
     var at = window.indexOfRow(shown.rows, keep)
@@ -333,10 +350,10 @@ PanelWindow {
     window.contentsShownAt = Date.now()
   }
 
-  // Where the selection goes when the section replaced its row: the last
-  // name row above the section. With none above, a row the user chose leaves
-  // nothing selected, and a row the launcher chose, or no row, gives way to
-  // the first Contents row.
+  // Where the selection goes when the section replaced its row or the row
+  // left the section: the last name row above the section. With none above,
+  // a row the user chose leaves nothing selected, and a row the launcher
+  // chose, or no row, gives way to the first Contents row.
   function afterCut(cut, keep) {
     var above = window.nextSelectable(cut, -1)
     return above >= 0 || (keep && !keep.auto) ? above : window.nextSelectable(cut, 1)

@@ -380,10 +380,12 @@ Item {
     if (!FileRanker.revealContent(query, fileLister.rows, !!(data && data.forced))) return false
     contentSearch.search({ serial: data.serial, query: query, roots: fileLister.defaultRoots }, function(reply) {
       var rows = FileRanker.contentRows(reply.matches, backend.fileSignals(), fileLister.rows).map(backend.contentHit)
-      callback({ serial: reply.serial, rows: rows, ms: reply.ms, killed: reply.killed })
+      callback({ serial: reply.serial, revision: backend.filesRevision, rows: rows, ms: reply.ms, killed: reply.killed })
     })
     return true
   }
+
+  function listedFiles(rows) { return FileRanker.listed(rows, fileLister.rows) }
 
   // A content row is a listed file, so files.open and every file action
   // take it.

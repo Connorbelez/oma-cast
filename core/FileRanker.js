@@ -448,10 +448,15 @@ function contentMatches(output) {
   return out
 }
 
+// The items whose path is a file in rows, in their order.
+function listed(items, rows) {
+  var byPath = joinedNames(rows).byPath
+  return items.filter(function(m) { return byPath[m.path] !== undefined })
+}
+
 // Listed files only, so every row opens through files.open.
 function contentRows(matches, s, rows) {
-  var listed = joinedNames(rows).byPath
-  return matches.filter(function(m) { return listed[m.path] !== undefined }).map(function(m) {
+  return listed(matches, rows).map(function(m) {
     return { match: m, prior: prior(m.path.slice(0, m.path.lastIndexOf("/")), s) }
   }).sort(function(a, b) {
     var p = a.match.path, q = b.match.path
@@ -463,6 +468,6 @@ if (typeof module !== "undefined") {
   module.exports = {
     band: band, signals: signals, usage: usage, score: score, prepare: prepare, rank: rank,
     CONTENT_MIN_CHARS: CONTENT_MIN_CHARS, nameHits: nameHits, revealContent: revealContent,
-    contentMatches: contentMatches, contentRows: contentRows
+    contentMatches: contentMatches, contentRows: contentRows, listed: listed
   }
 }

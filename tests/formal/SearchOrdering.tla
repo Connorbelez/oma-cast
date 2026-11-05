@@ -214,7 +214,7 @@ UiContents(X, r) ==
 \* A rebuild for the input of the files view's Contents record, such as a
 \* list refresh, new signals or a toast. The serial stays, nothing about
 \* contents is cancelled or restarted, and the synchronous answer puts the
-\* kept section back under the new rows.
+\* kept section back under the new rows, less the files the list dropped.
 KeepRebuild(X) ==
   LET X1 == IF CancelOnRebuild THEN NsCancel(X) ELSE X
   IN [NsCancel(X1) EXCEPT !.ui.rowsInput = X1.ui.input, !.ui.pending = FALSE]
@@ -224,9 +224,11 @@ KeepRebuild(X) ==
 \* second is a root query handed to NativeSearch. The files view is a
 \* synchronous view and the only one that restarts contentDelay and claims
 \* the Contents record for this input; it is open only while shown, because
-\* popToRoot(), the one rebuild while hidden, leaves it first.
+\* popToRoot(), the one rebuild while hidden, leaves it first. A rebuild
+\* for the record's own input keeps it, or, when the list dropped every row
+\* the reply had and changed since, claims a new record (keepsContents()).
+\* The model chooses between the two freely.
 UiRebuild(X) ==
-  IF X.ui.cfor = X.ui.input THEN {KeepRebuild(X)} ELSE
   LET serial == X.ui.serial + 1
       X1 == [X EXCEPT !.ui.serial = serial]
       X2 == IF CancelOnRebuild THEN NsCancel(X1) ELSE X1
@@ -235,8 +237,9 @@ UiRebuild(X) ==
       req == [id |-> 0, input |-> X3.ui.input, serial |-> serial, rev |-> X3.ui.rev]
       X4 == NsCancel(X3)                     \* searchAsync(): nativeSearch.cancel()
       Sync == UiCallback(X4, req, Fallback(req))
-  IN { Sync, NsSearch(X4, req) }
-     \cup (IF X4.ui.shown THEN {[Sync EXCEPT !.ui.ctimer = TRUE, !.ui.cfor = X4.ui.input, !.ui.held = NoHeld]} ELSE {})
+      Claim == IF X4.ui.shown THEN {[Sync EXCEPT !.ui.ctimer = TRUE, !.ui.cfor = X4.ui.input, !.ui.held = NoHeld]} ELSE {}
+  IN IF X.ui.cfor = X.ui.input THEN {KeepRebuild(X)} \cup Claim
+     ELSE { Sync, NsSearch(X4, req) } \cup Claim
 
 -----------------------------------------------------------------------------
 (* User and environment events. Each costs one unit of the event budget.   *)
